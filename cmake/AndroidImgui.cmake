@@ -10,6 +10,7 @@ endif()
 
 add_library(imgui STATIC
     ${STAR_ANDROID_IMGUI_DIR}/imgui.cpp
+    ${STAR_ANDROID_IMGUI_DIR}/imgui_demo.cpp
     ${STAR_ANDROID_IMGUI_DIR}/imgui_draw.cpp
     ${STAR_ANDROID_IMGUI_DIR}/imgui_tables.cpp
     ${STAR_ANDROID_IMGUI_DIR}/imgui_widgets.cpp
