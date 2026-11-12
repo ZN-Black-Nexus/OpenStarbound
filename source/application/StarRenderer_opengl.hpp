@@ -48,6 +48,7 @@ public:
   void setTexture(String const& textureName, ImageView const& image) override;
 
   void setScissorRect(Maybe<RectI> const& scissorRect) override;
+  void setScreenStretch(float stretch) override;
 
   bool switchEffectConfig(String const& name) override;
 

@@ -48,6 +48,9 @@ public:
 
   float interfaceScale() const;
   void setInterfaceScale(float interfaceScale);
+  // Horizontal stretch of the interface; the window appears narrower by this factor.
+  float interfaceStretch() const { return m_interfaceStretch; }
+  void setInterfaceStretch(float stretch) { m_interfaceStretch = stretch; }
 
   Maybe<Vec2I> mousePosition(InputEvent const& event, float pixelRatio) const;
   Maybe<Vec2I> mousePosition(InputEvent const& event) const;
@@ -148,6 +151,7 @@ private:
   KeyBindings m_keyBindings;
 
   float m_interfaceScale;
+  float m_interfaceStretch = 1.0f;
 
   bool m_shiftHeld;
 };

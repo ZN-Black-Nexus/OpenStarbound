@@ -75,7 +75,7 @@ TextPainterPtr const& GuiContext::textPainter() const {
 }
 
 unsigned GuiContext::windowWidth() const {
-  return renderer()->screenSize()[0];
+  return (unsigned)(renderer()->screenSize()[0] / m_interfaceStretch);
 }
 
 unsigned GuiContext::windowHeight() const {
@@ -83,7 +83,8 @@ unsigned GuiContext::windowHeight() const {
 }
 
 Vec2U GuiContext::windowSize() const {
-  return renderer()->screenSize();
+  auto size = renderer()->screenSize();
+  return Vec2U((unsigned)(size[0] / m_interfaceStretch), size[1]);
 }
 
 Vec2U GuiContext::windowInterfaceSize() const {
@@ -100,7 +101,8 @@ void GuiContext::setInterfaceScale(float interfaceScale) {
 }
 
 Maybe<Vec2I> GuiContext::mousePosition(InputEvent const& event, float pixelRatio) const {
-  auto getInterfacePosition = [pixelRatio](Vec2F pos) {
+  auto getInterfacePosition = [pixelRatio, this](Vec2F pos) {
+    pos[0] /= m_interfaceStretch;
     return Vec2I(pos / pixelRatio);
   };
 
@@ -133,7 +135,8 @@ void GuiContext::refreshKeybindings() {
 }
 
 void GuiContext::setInterfaceScissorRect(RectI const& scissor) {
-  renderer()->setScissorRect(RectI(RectF(scissor).scaled(interfaceScale())));
+  RectF rect = RectF(scissor).scaled(interfaceScale());
+  renderer()->setScissorRect(RectI(RectF(rect.xMin() * m_interfaceStretch, rect.yMin(), rect.xMax() * m_interfaceStretch, rect.yMax())));
 }
 
 void GuiContext::resetInterfaceScissorRect() {

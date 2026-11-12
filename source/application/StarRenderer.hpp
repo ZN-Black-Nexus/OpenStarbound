@@ -150,6 +150,8 @@ public:
   // Any further rendering will be scissored based on this rect, specified in
   // pixels
   virtual void setScissorRect(Maybe<RectI> const& scissorRect) = 0;
+  // Stretches everything drawn afterwards horizontally about the left edge.
+  virtual void setScreenStretch(float) {}
 
   virtual TexturePtr createTexture(Image const& texture,
       TextureAddressing addressing = TextureAddressing::Clamp,

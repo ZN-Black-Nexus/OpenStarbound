@@ -199,8 +199,15 @@ namespace {
   struct ScaleScope {
     GuiContext* context;
     float previous;
-    ScaleScope(GuiContext* c, float scale) : context(c), previous(c->interfaceScale()) { context->setInterfaceScale(scale); }
-    ~ScaleScope() { context->setInterfaceScale(previous); }
+    float previousStretch;
+    ScaleScope(GuiContext* c, pair<float, float> const& t) : context(c), previous(c->interfaceScale()), previousStretch(c->interfaceStretch()) {
+      context->setInterfaceScale(t.first);
+      context->setInterfaceStretch(t.second);
+    }
+    ~ScaleScope() {
+      context->setInterfaceScale(previous);
+      context->setInterfaceStretch(previousStretch);
+    }
   };
 
   void collectButtons(WidgetPtr const& widget, List<shared_ptr<ButtonWidget>>& out) {
@@ -252,7 +259,7 @@ float PaneManager::effectiveScale(PanePtr const& pane) const {
     Vec2F size = Vec2F(pane->size());
     if (size[0] <= 0 || size[1] <= 0)
       return global;
-    Vec2F window = Vec2F(m_context->windowSize());
+    Vec2F window = Vec2F(m_context->renderer()->screenSize());
     // Fractional so an oversized pane fills the screen instead of dropping a
     // whole step. The tolerance keeps window-sized panes (sized from the
     // current scale, rounded up) from shrinking themselves.
@@ -271,6 +278,27 @@ float PaneManager::effectiveScale(PanePtr const& pane) const {
   return global;
 }
 
+pair<float, float> PaneManager::paneTransform(PanePtr const& pane) const {
+  float scale = effectiveScale(pane);
+  float stretch = 1.0f;
+#ifdef STAR_SYSTEM_ANDROID
+  // Phone screens are much wider than the 4:3-ish windows, so widen menus and
+  // windows into the spare width; in-game windows keep to half the screen so
+  // two still fit side by side.
+  for (auto const& layerPair : m_displayedPanes) {
+    if (!layerPair.second.contains(pane))
+      continue;
+    float width = pane->size()[0] * scale;
+    if (touchLayer(layerPair.first) && width > 0) {
+      float available = m_context->renderer()->screenSize()[0] * (layerPair.first == PaneLayer::Window ? 0.5f : 0.98f);
+      stretch = clamp(available / width, 1.0f, 1.5f);
+    }
+    break;
+  }
+#endif
+  return {scale, stretch};
+}
+
 bool PaneManager::touchLayer(PaneLayer layer) const {
   return layer == PaneLayer::ModalWindow || layer == PaneLayer::Window || (layer == PaneLayer::Hud && m_touchAssistHud);
 }
@@ -283,9 +311,9 @@ PanePtr PaneManager::paneAtPixels(Vec2F pixelPos, bool touchLayersOnly) const {
       auto const& pane = panePair.first;
       if (pane == m_activeTooltip || !pane->active())
         continue;
-      float scale = effectiveScale(pane);
-      ScaleScope scope(m_context, scale);
-      if (pane->inWindow(Vec2I::floor(pixelPos / scale)))
+      auto t = paneTransform(pane);
+      ScaleScope scope(m_context, t);
+      if (pane->inWindow(Vec2I::floor(Vec2F(pixelPos[0] / (t.first * t.second), pixelPos[1] / t.first))))
         return pane;
       // a modal window blocks everything beneath it
       if (touchLayersOnly && layerPair.first == PaneLayer::ModalWindow)
@@ -310,9 +338,10 @@ Maybe<Vec2F> PaneManager::findSnapTarget(Vec2F pixelPos, float maxPixelDistance,
       auto const& pane = panePair.first;
       if (!pane->active())
         continue;
-      float scale = effectiveScale(pane);
-      ScaleScope scope(m_context, scale);
-      Vec2F interfacePos = pixelPos / scale;
+      auto t = paneTransform(pane);
+      float scale = t.first;
+      ScaleScope scope(m_context, t);
+      Vec2F interfacePos = Vec2F(pixelPos[0] / (scale * t.second), pixelPos[1] / scale);
       Vec2I ipos = Vec2I::floor(interfacePos);
       List<shared_ptr<ButtonWidget>> buttons;
       collectButtons(pane, buttons);
@@ -326,7 +355,7 @@ Maybe<Vec2F> PaneManager::findSnapTarget(Vec2F pixelPos, float maxPixelDistance,
         float dist = distanceToRect(rect, interfacePos) * scale;
         if (dist <= bestDist) {
           bestDist = dist;
-          best = Vec2F(rect.center()) * scale;
+          best = Vec2F(rect.center()[0] * scale * t.second, rect.center()[1] * scale);
         }
       }
       if (layer == PaneLayer::ModalWindow) {
@@ -370,11 +399,12 @@ bool PaneManager::handleTouchEvent(InputEvent const& event) {
         return true;
       m_touchScrollArea.reset();
       if (auto pane = paneAtPixels(m_touchStart, true)) {
-        float scale = effectiveScale(pane);
-        ScaleScope scope(m_context, scale);
-        if (auto area = findScrollArea(pane, Vec2I::floor(m_touchStart / scale))) {
+        auto t = paneTransform(pane);
+        ScaleScope scope(m_context, t);
+        Vec2F ppu = Vec2F(t.first * t.second, t.first);
+        if (auto area = findScrollArea(pane, Vec2I::floor(Vec2F(m_touchStart[0] / ppu[0], m_touchStart[1] / ppu[1])))) {
           m_touchScrollArea = area;
-          m_touchScrollScale = scale;
+          m_touchScrollScale = ppu;
           m_touchScrollRemainder = Vec2F();
         }
       }
@@ -390,7 +420,7 @@ bool PaneManager::handleTouchEvent(InputEvent const& event) {
     }
     if (m_touchPhase == TouchPhase::Scrolling) {
       // content follows the finger
-      Vec2F delta = (pos - m_touchLast) / m_touchScrollScale + m_touchScrollRemainder;
+      Vec2F delta = Vec2F((pos[0] - m_touchLast[0]) / m_touchScrollScale[0], (pos[1] - m_touchLast[1]) / m_touchScrollScale[1]) + m_touchScrollRemainder;
       Vec2I whole = Vec2I(delta);
       m_touchScrollRemainder = delta - Vec2F(whole);
       m_touchLast = pos;
@@ -459,6 +489,7 @@ bool PaneManager::handleInputEvent(InputEvent const& event) {
     for (auto const& layerPair : m_displayedPanes) {
       for (auto const& panePair : layerPair.second) {
         if (panePair.first->dragActive()) {
+          ScaleScope scope(m_context, paneTransform(panePair.first));
           panePair.first->drag(*m_context->mousePosition(event));
           return true;
         }
@@ -502,14 +533,14 @@ bool PaneManager::handleInputEvent(InputEvent const& event) {
   // ONLY be sent to it.
   auto keyCapturePane = keyboardCapturedPane();
   if (keyCapturePane && (event.is<KeyDownEvent>() || event.is<KeyUpEvent>() || event.is<TextInputEvent>()))
-    { ScaleScope scope(m_context, effectiveScale(keyCapturePane)); return keyCapturePane->sendEvent(event); }
+    { ScaleScope scope(m_context, paneTransform(keyCapturePane)); return keyCapturePane->sendEvent(event); }
 
   bool foundModal = false;
   for (auto& layerPair : m_displayedPanes) {
     for (auto const& panePair : copy(layerPair.second)) {
       bool consumed;
       {
-        ScaleScope scope(m_context, effectiveScale(panePair.first));
+        ScaleScope scope(m_context, paneTransform(panePair.first));
         consumed = panePair.first->sendEvent(event);
       }
       if (consumed) {
@@ -540,25 +571,39 @@ void PaneManager::render() {
   }
 
   float globalScale = m_context->interfaceScale();
-  HashMap<Pane const*, float> newScales;
+  auto renderer = m_context->renderer();
+  HashMap<Pane const*, pair<float, float>> newScales;
   for (auto const& layerPair : reverseIterate(m_displayedPanes)) {
     for (auto const& panePair : reverseIterate(layerPair.second)) {
       auto const& pane = panePair.first;
       if (pane->active()) {
-        float scale = effectiveScale(pane);
-        ScaleScope scope(m_context, scale);
-        float lastScale = m_paneScales.value(pane.get(), m_prevInterfaceScale);
-        if (scale < globalScale)
-          pane->setPosition(Vec2I((windowSize() - pane->size()) / 2));
-        else if (scale != lastScale)
-          pane->setPosition(calculateNewInterfacePosition(pane, scale / lastScale));
+        auto t = paneTransform(pane);
+        float scale = t.first, stretch = t.second;
+        auto last = m_paneScales.value(pane.get(), {m_prevInterfaceScale, 1.0f});
+        bool adapted = scale != globalScale || stretch != 1.0f;
+        // where the pane's center was on screen, in pixels, before any change
+        Vec2F center = Vec2F(pane->position()) + Vec2F(pane->size()) / 2;
+        center = Vec2F(center[0] * last.first * last.second, center[1] * last.first);
 
-        if (scale > globalScale && pane->anchor() == PaneAnchor::None)
+        ScaleScope scope(m_context, t);
+        if (scale < globalScale) {
+          pane->setPosition(Vec2I((windowSize() - pane->size()) / 2));
+        } else if (t != last) {
+          if (pane->anchor() == PaneAnchor::None && (adapted || last.second != 1.0f))
+            pane->setPosition(Vec2I::round(Vec2F(center[0] / (scale * stretch), center[1] / scale) - Vec2F(pane->size()) / 2));
+          else if (scale != last.first)
+            pane->setPosition(calculateNewInterfacePosition(pane, scale / last.first));
+        }
+        if (adapted && scale >= globalScale && pane->anchor() == PaneAnchor::None)
           pane->setPosition(pane->position().piecewiseClamp(Vec2I(), Vec2I().piecewiseMax(windowSize() - pane->size())));
 
-        newScales[pane.get()] = scale;
+        newScales[pane.get()] = t;
         pane->setDrawingOffset(calculatePaneOffset(pane));
+        if (stretch != 1.0f)
+          renderer->setScreenStretch(stretch);
         pane->render(RectI(Vec2I(), windowSize()));
+        if (stretch != 1.0f)
+          renderer->setScreenStretch(1.0f);
       }
     }
   }
@@ -589,11 +634,11 @@ void PaneManager::update(float dt) {
 
     m_tooltipShowTimer.reset();
     if (newTooltipParentPane) {
-      float parentScale = effectiveScale(newTooltipParentPane);
+      auto parentT = paneTransform(newTooltipParentPane);
       PanePtr tooltip;
       {
-        ScaleScope scope(m_context, parentScale);
-        tooltip = newTooltipParentPane->createTooltip(Vec2I::floor(m_tooltipLastMousePixels / parentScale));
+        ScaleScope scope(m_context, parentT);
+        tooltip = newTooltipParentPane->createTooltip(Vec2I::floor(Vec2F(m_tooltipLastMousePixels[0] / (parentT.first * parentT.second), m_tooltipLastMousePixels[1] / parentT.first)));
       }
       if (tooltip) {
         m_activeTooltip = std::move(tooltip);
@@ -630,7 +675,7 @@ void PaneManager::update(float dt) {
 
   for (auto const& layerPair : reverseIterate(m_displayedPanes)) {
     for (auto const& panePair : reverseIterate(layerPair.second)) {
-      ScaleScope scope(m_context, effectiveScale(panePair.first));
+      ScaleScope scope(m_context, paneTransform(panePair.first));
       panePair.first->tick(dt);
       if (panePair.first->active())
         panePair.first->update(dt);

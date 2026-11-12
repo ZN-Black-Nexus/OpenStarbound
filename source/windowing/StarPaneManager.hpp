@@ -97,6 +97,8 @@ private:
   // Interface scale this pane is drawn and hit-tested at. Panes too big to fit
   // the window at the global scale get their own smaller scale (Android only).
   float effectiveScale(PanePtr const& pane) const;
+  // {scale, horizontal stretch} a pane is drawn and hit-tested with
+  pair<float, float> paneTransform(PanePtr const& pane) const;
 
   Vec2I windowSize() const;
   Vec2I calculatePaneOffset(PanePtr const& pane) const;
@@ -106,7 +108,7 @@ private:
   GuiContext* m_context;
   float m_prevInterfaceScale;
 
-  HashMap<Pane const*, float> m_paneScales;
+  HashMap<Pane const*, pair<float, float>> m_paneScales;
 
   // Touch gestures over panes: a press is held back until it resolves into a
   // tap (snapped to the nearest button), a drag, a scroll of the scroll area
@@ -118,7 +120,7 @@ private:
   Vec2F m_touchLast;
   double m_touchStartTime = 0.0;
   WidgetPtr m_touchScrollArea;
-  float m_touchScrollScale = 1.0f;
+  Vec2F m_touchScrollScale = Vec2F(1.0f, 1.0f);
   Vec2F m_touchScrollRemainder;
   Vec2F m_tooltipLastMousePixels;
 

@@ -784,6 +784,11 @@ void OpenGlRenderer::setScissorRect(Maybe<RectI> const& scissorRect) {
   }
 }
 
+void OpenGlRenderer::setScreenStretch(float stretch) {
+  flushImmediatePrimitives();
+  glUniform2f(m_screenSizeUniform, m_screenSize[0] / stretch, m_screenSize[1]);
+}
+
 TexturePtr OpenGlRenderer::createTexture(Image const& texture, TextureAddressing addressing, TextureFiltering filtering) {
   return createGlTexture(texture, addressing, filtering);
 }
