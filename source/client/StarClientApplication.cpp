@@ -448,6 +448,17 @@ void ClientApplication::render() {
   else
     m_guiContext->setInterfaceScale(m_minInterfaceScale);
 
+#ifdef STAR_SYSTEM_ANDROID
+  // Phone screens are short: cap the scale so the window is never fewer than
+  // MinInterfaceHeight interface units tall, otherwise panes get cut off.
+  {
+    float const MinInterfaceHeight = 340.0f;
+    float maxScale = std::max(1.0f, std::floor(m_guiContext->windowHeight() / MinInterfaceHeight));
+    if (m_guiContext->interfaceScale() > maxScale)
+      m_guiContext->setInterfaceScale(maxScale);
+  }
+#endif
+
   if (m_state == MainAppState::Mods || m_state == MainAppState::Splash) {
     m_cinematicOverlay->render();
 

@@ -7,6 +7,8 @@
 
 #include "SDL3/SDL.h"
 
+#include <stdlib.h>
+
 namespace Star {
 
 namespace {
@@ -72,8 +74,11 @@ String prepareAndroidDataDirectory() {
   File::makeDirectoryRecursive(dataDir);
   File::changeDirectory(dataDir);
 
-  for (auto sub : {"assets", "mods", "storage", "logs"})
+  for (auto sub : {"assets", "mods", "storage", "logs", "tmp"})
     File::makeDirectoryRecursive(File::relativeTo(dataDir, sub));
+
+  // bionic has no writable /tmp; File temp helpers read TMPDIR on Android.
+  setenv("TMPDIR", File::relativeTo(dataDir, "tmp").utf8Ptr(), 1);
 
   extractBundledAssets(dataDir);
 
