@@ -79,6 +79,7 @@ public:
 
   virtual WidgetPtr getChildAt(Vec2I const& pos) override;
 
+  bool disabled() const { return m_disabled; }
   void disable();
   void enable();
   void setEnabled(bool enabled);

@@ -50,6 +50,9 @@ public:
   virtual void setAcceptingTextInput(bool acceptingTextInput) = 0;
   virtual void setTextArea(Maybe<pair<RectI, int>> area = {}) = 0;
 
+  // Touch platforms only: show the on-screen gameplay buttons.
+  virtual void setTouchControlsVisible(bool) {}
+
 
   virtual AudioFormat enableAudio() = 0;
   virtual void disableAudio() = 0;

@@ -979,6 +979,7 @@ void ClientApplication::updateTitle(float dt) {
   else
     app->setTextArea();
   app->setAcceptingTextInput(inputActive);
+  app->setTouchControlsVisible(false);
 
   auto p2pNetworkingService = app->p2pNetworkingService();
   if (p2pNetworkingService) {
@@ -1293,6 +1294,7 @@ void ClientApplication::updateRunning(float dt) {
     else
       app->setTextArea();
     app->setAcceptingTextInput(inputActive);
+    app->setTouchControlsVisible(true);
 
     for (auto const& interactAction : m_player->pullInteractActions())
       m_mainInterface->handleInteractAction(interactAction);

@@ -82,6 +82,10 @@ public:
   void update(float dt);
 
 private:
+  bool handleInputEvent(InputEvent const& event);
+  InputEvent snapTouchEvent(InputEvent const& event);
+  Maybe<Vec2F> findSnapTarget(Vec2F interfacePos, float maxDistance) const;
+
   Vec2I windowSize() const;
   Vec2I calculatePaneOffset(PanePtr const& pane) const;
   Vec2I calculateNewInterfacePosition(PanePtr const& pane, float interfaceScaleRatio) const;
@@ -89,6 +93,11 @@ private:
 
   GuiContext* m_context;
   float m_prevInterfaceScale;
+
+  // Touch tap-snapping: offset in window pixels applied to mouse events while a
+  // touch is down so that a tap near a button lands on it.
+  bool m_touchDown = false;
+  Vec2F m_touchSnapOffset;
 
   // Map of each pane layer, where the 0th pane is the topmost pane in each layer.
   Map<PaneLayer, OrderedMap<PanePtr, DismissCallback>> m_displayedPanes;

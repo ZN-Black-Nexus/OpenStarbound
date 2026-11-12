@@ -3,6 +3,7 @@
 #include "StarJsonExtra.hpp"
 #include "StarAssets.hpp"
 #include "StarRoot.hpp"
+#include "StarButtonWidget.hpp"
 
 namespace Star {
 
@@ -192,7 +193,104 @@ bool PaneManager::keyboardCapturedForTextInput() const {
   return false;
 }
 
+namespace {
+  void collectButtons(WidgetPtr const& widget, List<shared_ptr<ButtonWidget>>& out) {
+    if (!widget || !widget->visibility())
+      return;
+    if (auto button = as<ButtonWidget>(widget)) {
+      if (!button->mouseTransparent() && button->interactive() && !button->disabled())
+        out.append(button);
+    }
+    for (size_t i = 0; i < widget->numChildren(); ++i)
+      collectButtons(widget->getChildNum(i), out);
+  }
+
+  float distanceToRect(RectI const& rect, Vec2F const& p) {
+    float dx = std::max({(float)rect.xMin() - p[0], 0.0f, p[0] - (float)rect.xMax()});
+    float dy = std::max({(float)rect.yMin() - p[1], 0.0f, p[1] - (float)rect.yMax()});
+    return std::sqrt(dx * dx + dy * dy);
+  }
+}
+
+Maybe<Vec2F> PaneManager::findSnapTarget(Vec2F interfacePos, float maxDistance) const {
+  Vec2I ipos = Vec2I::floor(interfacePos);
+  Maybe<Vec2F> best;
+  float bestDist = maxDistance;
+  bool foundModal = false;
+
+  for (auto layer : {PaneLayer::ModalWindow, PaneLayer::Window}) {
+    auto layerIt = m_displayedPanes.find(layer);
+    if (layerIt == m_displayedPanes.end())
+      continue;
+    for (auto const& panePair : layerIt->second) {
+      auto const& pane = panePair.first;
+      if (!pane->active())
+        continue;
+      List<shared_ptr<ButtonWidget>> buttons;
+      collectButtons(pane, buttons);
+      for (auto const& button : buttons) {
+        RectI rect = button->screenBoundRect();
+        if (rect.contains(ipos))
+          return {};  // already on a button; leave the tap alone
+        float dist = distanceToRect(rect, interfacePos);
+        if (dist <= bestDist) {
+          bestDist = dist;
+          best = Vec2F(rect.center());
+        }
+      }
+      if (layer == PaneLayer::ModalWindow) {
+        foundModal = true;
+        break;
+      }
+      if (pane->inWindow(ipos))
+        break;
+    }
+    if (foundModal)
+      break;
+  }
+  return best;
+}
+
+InputEvent PaneManager::snapTouchEvent(InputEvent const& event) {
+#ifdef STAR_SYSTEM_ANDROID
+  if (auto down = event.ptr<MouseButtonDownEvent>()) {
+    m_touchDown = true;
+    m_touchSnapOffset = Vec2F();
+    float scale = m_context->interfaceScale();
+    Vec2F interfacePos = down->mousePosition / scale;
+    Vec2F pixels = Vec2F(windowSize()) * scale;
+    float maxDistance = 0.055f * std::min(pixels[0], pixels[1]) / scale;
+    if (auto target = findSnapTarget(interfacePos, maxDistance)) {
+      m_touchSnapOffset = (*target - interfacePos) * scale;
+      auto result = *down;
+      result.mousePosition += m_touchSnapOffset;
+      return result;
+    }
+    return event;
+  }
+  if (m_touchDown) {
+    if (auto move = event.ptr<MouseMoveEvent>()) {
+      auto result = *move;
+      result.mousePosition += m_touchSnapOffset;
+      return result;
+    }
+    if (auto up = event.ptr<MouseButtonUpEvent>()) {
+      auto result = *up;
+      result.mousePosition += m_touchSnapOffset;
+      m_touchDown = false;
+      m_touchSnapOffset = Vec2F();
+      return result;
+    }
+  }
+#endif
+  return event;
+}
+
 bool PaneManager::sendInputEvent(InputEvent const& event) {
+  return handleInputEvent(snapTouchEvent(event));
+}
+
+bool PaneManager::handleInputEvent(InputEvent const& event) {
   if (event.is<MouseMoveEvent>()) {
     m_tooltipLastMousePos = *m_context->mousePosition(event);
 

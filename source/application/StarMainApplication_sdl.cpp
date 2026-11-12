@@ -1044,6 +1044,10 @@ private:
       }
     }
 
+    void setTouchControlsVisible(bool visible) override {
+      parent->m_touchControls.setVisible(visible);
+    }
+
     void setTextArea(Maybe<pair<RectI, int>> area) override {
       if (parent->m_textInputArea == area)
         return;
