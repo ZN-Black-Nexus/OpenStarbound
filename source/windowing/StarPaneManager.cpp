@@ -194,6 +194,13 @@ bool PaneManager::keyboardCapturedForTextInput() const {
 }
 
 namespace {
+  struct ScaleScope {
+    GuiContext* context;
+    float previous;
+    ScaleScope(GuiContext* c, float scale) : context(c), previous(c->interfaceScale()) { context->setInterfaceScale(scale); }
+    ~ScaleScope() { context->setInterfaceScale(previous); }
+  };
+
   void collectButtons(WidgetPtr const& widget, List<shared_ptr<ButtonWidget>>& out) {
     if (!widget || !widget->visibility())
       return;
@@ -212,26 +219,34 @@ namespace {
   }
 }
 
-Vec2I PaneManager::largestWindowSize() const {
-  Vec2I result;
-  for (auto layer : {PaneLayer::ModalWindow, PaneLayer::Window, PaneLayer::Hud}) {
-    if (layer == PaneLayer::Hud && !m_touchAssistHud)
+float PaneManager::effectiveScale(PanePtr const& pane) const {
+  float global = m_context->interfaceScale();
+#ifdef STAR_SYSTEM_ANDROID
+  for (auto const& layerPair : m_displayedPanes) {
+    if (!layerPair.second.contains(pane))
       continue;
-    auto layerIt = m_displayedPanes.find(layer);
-    if (layerIt == m_displayedPanes.end())
-      continue;
-    for (auto const& panePair : layerIt->second) {
-      if (panePair.first->active())
-        result = result.piecewiseMax(panePair.first->size());
-    }
+    if (layerPair.first == PaneLayer::World || layerPair.first == PaneLayer::Tooltip)
+      return global;
+    if (layerPair.first == PaneLayer::Hud && !m_touchAssistHud)
+      return global;
+    Vec2F size = Vec2F(pane->size());
+    if (size[0] <= 0 || size[1] <= 0)
+      return global;
+    Vec2F window = Vec2F(m_context->windowSize());
+    // the small tolerance keeps window-sized panes (sized from the current
+    // scale, rounded up) from shrinking themselves
+    float fit = std::floor(std::min(window[0] / size[0], window[1] / size[1]) + 0.02f);
+    return std::min(global, std::max(1.0f, fit));
   }
-  return result;
+#else
+  (void)pane;
+#endif
+  return global;
 }
 
-Maybe<Vec2F> PaneManager::findSnapTarget(Vec2F interfacePos, float maxDistance) const {
-  Vec2I ipos = Vec2I::floor(interfacePos);
+Maybe<Vec2F> PaneManager::findSnapTarget(Vec2F pixelPos, float maxPixelDistance) const {
   Maybe<Vec2F> best;
-  float bestDist = maxDistance;
+  float bestDist = maxPixelDistance;
   bool foundModal = false;
 
   for (auto layer : {PaneLayer::ModalWindow, PaneLayer::Window, PaneLayer::Hud}) {
@@ -244,16 +259,20 @@ Maybe<Vec2F> PaneManager::findSnapTarget(Vec2F interfacePos, float maxDistance) 
       auto const& pane = panePair.first;
       if (!pane->active())
         continue;
+      float scale = effectiveScale(pane);
+      ScaleScope scope(m_context, scale);
+      Vec2F interfacePos = pixelPos / scale;
+      Vec2I ipos = Vec2I::floor(interfacePos);
       List<shared_ptr<ButtonWidget>> buttons;
       collectButtons(pane, buttons);
       for (auto const& button : buttons) {
         RectI rect = button->screenBoundRect();
         if (rect.contains(ipos))
           return {};  // already on a button; leave the tap alone
-        float dist = distanceToRect(rect, interfacePos);
+        float dist = distanceToRect(rect, interfacePos) * scale;
         if (dist <= bestDist) {
           bestDist = dist;
-          best = Vec2F(rect.center());
+          best = Vec2F(rect.center()) * scale;
         }
       }
       if (layer == PaneLayer::ModalWindow) {
@@ -274,12 +293,10 @@ InputEvent PaneManager::snapTouchEvent(InputEvent const& event) {
   if (auto down = event.ptr<MouseButtonDownEvent>()) {
     m_touchDown = true;
     m_touchSnapOffset = Vec2F();
-    float scale = m_context->interfaceScale();
-    Vec2F interfacePos = down->mousePosition / scale;
-    Vec2F pixels = Vec2F(windowSize()) * scale;
-    float maxDistance = 0.055f * std::min(pixels[0], pixels[1]) / scale;
-    if (auto target = findSnapTarget(interfacePos, maxDistance)) {
-      m_touchSnapOffset = (*target - interfacePos) * scale;
+    Vec2F pixels = Vec2F(m_context->windowSize());
+    float maxDistance = 0.055f * std::min(pixels[0], pixels[1]);
+    if (auto target = findSnapTarget(down->mousePosition, maxDistance)) {
+      m_touchSnapOffset = *target - down->mousePosition;
       auto result = *down;
       result.mousePosition += m_touchSnapOffset;
       return result;
@@ -358,12 +375,17 @@ bool PaneManager::handleInputEvent(InputEvent const& event) {
   // ONLY be sent to it.
   auto keyCapturePane = keyboardCapturedPane();
   if (keyCapturePane && (event.is<KeyDownEvent>() || event.is<KeyUpEvent>() || event.is<TextInputEvent>()))
-    return keyCapturePane->sendEvent(event);
+    { ScaleScope scope(m_context, effectiveScale(keyCapturePane)); return keyCapturePane->sendEvent(event); }
 
   bool foundModal = false;
   for (auto& layerPair : m_displayedPanes) {
     for (auto const& panePair : copy(layerPair.second)) {
-      if (panePair.first->sendEvent(event)) {
+      bool consumed;
+      {
+        ScaleScope scope(m_context, effectiveScale(panePair.first));
+        consumed = panePair.first->sendEvent(event);
+      }
+      if (consumed) {
         if (event.is<MouseButtonDownEvent>())
           layerPair.second.toFront(panePair.first);
         return true;
@@ -390,21 +412,30 @@ void PaneManager::render() {
     m_backgroundWidget->render(RectI(Vec2I(), windowSize()));
   }
 
+  float globalScale = m_context->interfaceScale();
+  HashMap<Pane const*, float> newScales;
   for (auto const& layerPair : reverseIterate(m_displayedPanes)) {
     for (auto const& panePair : reverseIterate(layerPair.second)) {
-      if (panePair.first->active()) {
-        if (m_prevInterfaceScale != m_context->interfaceScale())
-          panePair.first->setPosition(
-              calculateNewInterfacePosition(panePair.first, (float)m_context->interfaceScale() / m_prevInterfaceScale));
+      auto const& pane = panePair.first;
+      if (pane->active()) {
+        float scale = effectiveScale(pane);
+        ScaleScope scope(m_context, scale);
+        float lastScale = m_paneScales.value(pane.get(), m_prevInterfaceScale);
+        if (scale < globalScale)
+          pane->setPosition(Vec2I((windowSize() - pane->size()) / 2));
+        else if (scale != lastScale)
+          pane->setPosition(calculateNewInterfacePosition(pane, scale / lastScale));
 
-        panePair.first->setDrawingOffset(calculatePaneOffset(panePair.first));
-        panePair.first->render(RectI(Vec2I(), windowSize()));
+        newScales[pane.get()] = scale;
+        pane->setDrawingOffset(calculatePaneOffset(pane));
+        pane->render(RectI(Vec2I(), windowSize()));
       }
     }
   }
+  m_paneScales = std::move(newScales);
 
   m_context->resetInterfaceScissorRect();
-  m_prevInterfaceScale = m_context->interfaceScale();
+  m_prevInterfaceScale = globalScale;
 }
 
 void PaneManager::update(float dt) {
@@ -459,6 +490,7 @@ void PaneManager::update(float dt) {
 
   for (auto const& layerPair : reverseIterate(m_displayedPanes)) {
     for (auto const& panePair : reverseIterate(layerPair.second)) {
+      ScaleScope scope(m_context, effectiveScale(panePair.first));
       panePair.first->tick(dt);
       if (panePair.first->active())
         panePair.first->update(dt);

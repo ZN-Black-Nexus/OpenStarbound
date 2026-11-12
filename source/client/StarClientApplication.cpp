@@ -448,28 +448,6 @@ void ClientApplication::render() {
   else
     m_guiContext->setInterfaceScale(m_minInterfaceScale);
 
-#ifdef STAR_SYSTEM_ANDROID
-  // Phone screens are short, so a big interface scale makes panes taller than
-  // the window. Keep the user's scale but step it down while a pane that would
-  // be cut off is open; it comes back when that pane closes.
-  {
-    PaneManager* paneManager = nullptr;
-    if (m_state <= MainAppState::Title)
-      paneManager = m_titleScreen ? m_titleScreen->paneManager() : nullptr;
-    else
-      paneManager = m_mainInterface ? m_mainInterface->paneManager() : nullptr;
-    if (paneManager) {
-      Vec2F pane = Vec2F(paneManager->largestWindowSize()) * 1.04f;  // small margin for widgets outside the pane's background
-      Vec2F window = Vec2F(m_guiContext->windowSize());
-      if (pane[0] > 0 && pane[1] > 0) {
-        float fit = std::max(1.0f, std::floor(std::min(window[0] / pane[0], window[1] / pane[1]) + 0.05f));
-        if (m_guiContext->interfaceScale() > fit)
-          m_guiContext->setInterfaceScale(fit);
-      }
-    }
-  }
-#endif
-
   if (m_state == MainAppState::Mods || m_state == MainAppState::Splash) {
     m_cinematicOverlay->render();
 

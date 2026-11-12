@@ -2,6 +2,7 @@
 
 #include "StarPane.hpp"
 #include "StarOrderedMap.hpp"
+#include "StarMap.hpp"
 #include "StarBiMap.hpp"
 #include "StarGameTimers.hpp"
 
@@ -85,13 +86,13 @@ public:
   // ModalWindow panes only; menus built from Hud panes (title screen) opt in.
   void setTouchAssistHud(bool enabled) { m_touchAssistHud = enabled; }
 
-  // Size of the largest open Window / ModalWindow pane, in interface units.
-  Vec2I largestWindowSize() const;
-
 private:
   bool handleInputEvent(InputEvent const& event);
   InputEvent snapTouchEvent(InputEvent const& event);
-  Maybe<Vec2F> findSnapTarget(Vec2F interfacePos, float maxDistance) const;
+  Maybe<Vec2F> findSnapTarget(Vec2F pixelPos, float maxPixelDistance) const;
+  // Interface scale this pane is drawn and hit-tested at. Panes too big to fit
+  // the window at the global scale get their own smaller scale (Android only).
+  float effectiveScale(PanePtr const& pane) const;
 
   Vec2I windowSize() const;
   Vec2I calculatePaneOffset(PanePtr const& pane) const;
@@ -103,6 +104,7 @@ private:
 
   // Touch tap-snapping: offset in window pixels applied to mouse events while a
   // touch is down so that a tap near a button lands on it.
+  HashMap<Pane const*, float> m_paneScales;
   bool m_touchAssistHud = false;
   bool m_touchDown = false;
   Vec2F m_touchSnapOffset;
