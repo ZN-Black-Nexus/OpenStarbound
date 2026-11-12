@@ -81,6 +81,9 @@ public:
   void render();
   void update(float dt);
 
+  // Size of the largest open Window / ModalWindow pane, in interface units.
+  Vec2I largestWindowSize() const;
+
 private:
   bool handleInputEvent(InputEvent const& event);
   InputEvent snapTouchEvent(InputEvent const& event);

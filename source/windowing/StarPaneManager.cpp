@@ -212,6 +212,20 @@ namespace {
   }
 }
 
+Vec2I PaneManager::largestWindowSize() const {
+  Vec2I result;
+  for (auto layer : {PaneLayer::ModalWindow, PaneLayer::Window}) {
+    auto layerIt = m_displayedPanes.find(layer);
+    if (layerIt == m_displayedPanes.end())
+      continue;
+    for (auto const& panePair : layerIt->second) {
+      if (panePair.first->active())
+        result = result.piecewiseMax(panePair.first->size());
+    }
+  }
+  return result;
+}
+
 Maybe<Vec2F> PaneManager::findSnapTarget(Vec2F interfacePos, float maxDistance) const {
   Vec2I ipos = Vec2I::floor(interfacePos);
   Maybe<Vec2F> best;
