@@ -3,7 +3,14 @@
 #include "StarTextureAtlas.hpp"
 #include "StarRenderer.hpp"
 
+#ifdef STAR_SYSTEM_ANDROID
+// Android only has OpenGL ES, loaded straight from libGLESv3.
+#define STAR_OPENGL_ES
+#include <GLES3/gl3.h>
+#include <GLES2/gl2ext.h>
+#else
 #include "GL/glew.h"
+#endif
 
 namespace Star {
 

@@ -7,6 +7,76 @@ namespace Star {
 
 size_t const MultiTextureCount = 4;
 
+// Capabilities that differ between desktop OpenGL 3.1+ and OpenGL ES 3.0.
+static bool GlHdrCapable = true;
+
+#ifdef STAR_OPENGL_ES
+
+// Desktop GLSL 1.40 shaders (the ones in the assets, including mods) are rewritten
+// for GLSL ES 3.00 by swapping the version header; the rest of the dialect is shared.
+static std::string adaptShaderForGles(std::string source) {
+  auto versionPos = source.find("#version");
+  if (versionPos == std::string::npos)
+    return source;
+  auto lineEnd = source.find('\n', versionPos);
+  if (lineEnd == std::string::npos)
+    lineEnd = source.size();
+  source.replace(versionPos, lineEnd - versionPos,
+      "#version 300 es\n"
+      "precision highp float;\n"
+      "precision highp int;\n"
+      "precision highp sampler2D;");
+  return source;
+}
+
+static std::vector<uint8_t> swapRedBlue(uint8_t const* data, Vec2U size, unsigned channels) {
+  std::vector<uint8_t> out(data, data + size_t(size[0]) * size[1] * channels);
+  for (size_t i = 0; i + channels <= out.size(); i += channels)
+    std::swap(out[i], out[i + 2]);
+  return out;
+}
+
+static bool glHasExtension(char const* name) {
+  GLint count = 0;
+  glGetIntegerv(GL_NUM_EXTENSIONS, &count);
+  for (GLint i = 0; i < count; ++i) {
+    auto ext = (char const*)glGetStringi(GL_EXTENSIONS, i);
+    if (ext && strcmp(ext, name) == 0)
+      return true;
+  }
+  return false;
+}
+
+#endif
+
+// Allocates (or reallocates) the color storage of a framebuffer texture that is
+// currently bound to `target`.
+static void allocateFrameBufferStorage(GLenum target, unsigned multisample, bool hdr, bool alpha, Vec2U size) {
+#ifdef STAR_OPENGL_ES
+  // GLES 3.0 has no multisample textures, and RGB16F / RGB8 are not reliably
+  // color-renderable, so always use RGBA with half floats for HDR.
+  (void)target;
+  (void)multisample;
+  (void)alpha;
+  hdr = hdr && GlHdrCapable;
+  glTexImage2D(GL_TEXTURE_2D, 0, hdr ? GL_RGBA16F : GL_RGBA8, size[0], size[1], 0, GL_RGBA,
+      hdr ? GL_HALF_FLOAT : GL_UNSIGNED_BYTE, nullptr);
+#else
+  (void)target;
+  if (multisample) {
+    auto internalFormat = hdr ? GL_RGBA16F : GL_RGBA8;
+    glTexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, multisample, internalFormat, size[0], size[1], GL_TRUE);
+  } else {
+    auto format = alpha ? GL_RGBA : GL_RGB;
+    auto internalFormat = hdr ?
+        (alpha ? GL_RGBA16F : GL_RGB16F) :
+        (alpha ? GL_RGBA8 : GL_RGB8);
+    auto type = hdr ? GL_FLOAT : GL_UNSIGNED_BYTE;
+    glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, size[0], size[1], 0, format, type, NULL);
+  }
+#endif
+}
+
 char const* DefaultVertexShader = R"SHADER(
 #version 140
 
@@ -104,9 +174,13 @@ bool settingModeValue(BoolSettingMode const& mode, bool const& setting) {
 }
 
 OpenGlRenderer::OpenGlRenderer() {
+#ifdef STAR_OPENGL_ES
+  GlHdrCapable = glHasExtension("GL_EXT_color_buffer_float") || glHasExtension("GL_EXT_color_buffer_half_float");
+#else
   auto glewResult = glewInit();
   if (glewResult != GLEW_OK && glewResult != GLEW_ERROR_NO_GLX_DISPLAY)
     throw RendererException::format("Could not initialize GLEW: {}", (char*)glewGetErrorString(glewResult));
+#endif
 
   Logger::info("OpenGL version: '{}' vendor: '{}' renderer: '{}' shader: '{}'",
       (const char*)glGetString(GL_VERSION),
@@ -118,10 +192,12 @@ OpenGlRenderer::OpenGlRenderer() {
   glEnable(GL_BLEND);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
   glDisable(GL_DEPTH_TEST);
+#ifndef STAR_OPENGL_ES
   if (GLEW_VERSION_4_3) {
     //glEnable(GL_DEBUG_OUTPUT);
     //glDebugMessageCallback(GlMessageCallback, this);
   }
+#endif
 
   m_whiteTexture = createGlTexture(Image::filled({1, 1}, Vec4B(255, 255, 255, 255), PixelFormat::RGBA32),
       TextureAddressing::Clamp,
@@ -165,8 +241,13 @@ OpenGlRenderer::GlFrameBuffer::GlFrameBuffer(Json const& fbConfig) : config(fbCo
 
   clear = config.getBool("clear",true);
   
+#ifdef STAR_OPENGL_ES
+  multisample = 0;
+  GLenum target = GL_TEXTURE_2D;
+#else
   multisample = GLEW_VERSION_4_0 ? config.getUInt("multisample", 0) : 0;
   GLenum target = multisample ? GL_TEXTURE_2D_MULTISAMPLE : GL_TEXTURE_2D;
+#endif
   glBindTexture(target, texture->glTextureId());
   
   hdrMode = BoolSettingModeNames.getLeft(config.getString("hdr","Disabled"));
@@ -180,20 +261,7 @@ OpenGlRenderer::GlFrameBuffer::GlFrameBuffer(Json const& fbConfig) : config(fbCo
     size = *overrideSize;
   }
 
-  if (multisample) {
-    auto internalFormat =  hdr ? GL_RGBA16F : GL_RGBA8;
-    
-    glTexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, multisample, internalFormat, size[0], size[1], GL_TRUE);
-  } else {
-    auto format = alpha ? GL_RGBA : GL_RGB;
-    auto internalFormat =  hdr ? 
-        (alpha ? GL_RGBA16F : GL_RGB16F) :
-        (alpha ? GL_RGBA8 : GL_RGB8);
-    auto type = hdr ? GL_FLOAT : GL_UNSIGNED_BYTE;
-    
-    glTexImage2D(
-      GL_TEXTURE_2D, 0, internalFormat, size[0], size[1], 0, format, type, NULL);
-  }
+  allocateFrameBufferStorage(target, multisample, hdr, alpha, size);
   auto addressing = TextureAddressingNames.getLeft(config.getString("textureAddressing", "clamp"));
   auto filtering = TextureFilteringNames.getLeft(config.getString("textureFiltering", "nearest"));
   if (!multisample) {
@@ -236,27 +304,18 @@ void OpenGlRenderer::GlFrameBuffer::makeAlt(Vec2U const& screenSize) {
     throw RendererException("Could not generate OpenGL texture for framebuffer");
 
   
+#ifdef STAR_OPENGL_ES
+  GLenum target = GL_TEXTURE_2D;
+#else
   GLenum target = multisample ? GL_TEXTURE_2D_MULTISAMPLE : GL_TEXTURE_2D;
+#endif
   glBindTexture(target, altTexture->glTextureId());
   
   bool hdr = settingModeValue(hdrMode,config.getBool("hdrSetting",false));
 
   Vec2U size = overrideSize ? *overrideSize : (screenSize / sizeDiv);
 
-  if (multisample) {
-    auto internalFormat =  hdr ? GL_RGBA16F : GL_RGBA8;
-    
-    glTexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, multisample, internalFormat, size[0], size[1], GL_TRUE);
-  } else {
-    auto format = alpha ? GL_RGBA : GL_RGB;
-    auto internalFormat =  hdr ? 
-        (alpha ? GL_RGBA16F : GL_RGB16F) :
-        (alpha ? GL_RGBA8 : GL_RGB8);
-    auto type = hdr ? GL_FLOAT : GL_UNSIGNED_BYTE;
-    
-    glTexImage2D(
-      GL_TEXTURE_2D, 0, internalFormat, size[0], size[1], 0, format, type, NULL);
-  }
+  allocateFrameBufferStorage(target, multisample, hdr, alpha, size);
   auto addressing = TextureAddressingNames.getLeft(config.getString("textureAddressing", "clamp"));
   auto filtering = TextureFilteringNames.getLeft(config.getString("textureFiltering", "nearest"));
   if (!multisample) {
@@ -378,7 +437,12 @@ void OpenGlRenderer::loadEffectConfig(String const& name, Json const& effectConf
     auto* source = shaders.ptr(name);
     if (!source)
       return 0;
+#ifdef STAR_OPENGL_ES
+    std::string adaptedSource = adaptShaderForGles(source->utf8());
+    char const* sourcePtr = adaptedSource.c_str();
+#else
     char const* sourcePtr = source->utf8Ptr();
+#endif
     glShaderSource(shader, 1, &sourcePtr, NULL);
     glCompileShader(shader);
 
@@ -733,6 +797,11 @@ void OpenGlRenderer::setMultiTexturingEnabled(bool enabled) {
 }
 
 void OpenGlRenderer::setMultiSampling(unsigned multiSampling) {
+#ifdef STAR_OPENGL_ES
+  // no multisample textures on GLES 3.0
+  (void)multiSampling;
+  return;
+#else
   if (m_multiSampling == multiSampling)
     return;
 
@@ -747,6 +816,7 @@ void OpenGlRenderer::setMultiSampling(unsigned multiSampling) {
     glDisable(GL_MULTISAMPLE);
   }
   loadConfig(m_config);
+#endif
 }
 
 void OpenGlRenderer::setMainHDR(bool enabled) {
@@ -772,6 +842,12 @@ TextureGroupPtr OpenGlRenderer::createTextureGroup(TextureGroupSize textureSize,
     atlasNumCells = 128;
   else // TextureGroupSize::Small
     atlasNumCells = 64;
+
+#ifdef STAR_OPENGL_ES
+  // keep atlas memory sane on phones: 4096x4096 RGBA is 64 MiB per atlas
+  if (textureSize == TextureGroupSize::Large)
+    textureSize = TextureGroupSize::Medium;
+#endif
 
   Logger::info("detected supported OpenGL texture size {}, using atlasNumCells {}", maxTextureSize, atlasNumCells);
 
@@ -813,28 +889,14 @@ void OpenGlRenderer::setScreenSize(Vec2U screenSize) {
     }
     unsigned sizeDiv = frameBuffer.second->sizeDiv;
     bool hdr = settingModeValue(frameBuffer.second->hdrMode,m_hdrSetting);
-    if (unsigned multisample = frameBuffer.second->multisample) {
-      auto internalFormat =  hdr ? GL_RGBA16F : GL_RGBA8;
-      
-      glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, frameBuffer.second->texture->glTextureId());
-      glTexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, multisample, internalFormat, m_screenSize[0] / sizeDiv, m_screenSize[1] / sizeDiv, GL_TRUE);
-      if (frameBuffer.second->hasAlt) {
-        glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, frameBuffer.second->altTexture->glTextureId());
-        glTexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, multisample, internalFormat, m_screenSize[0] / sizeDiv, m_screenSize[1] / sizeDiv, GL_TRUE);
-      }
-    } else {
-      auto format = frameBuffer.second->alpha ? GL_RGBA : GL_RGB;
-      auto internalFormat =  hdr ? 
-          (frameBuffer.second->alpha ? GL_RGBA16F : GL_RGB16F) :
-          (frameBuffer.second->alpha ? GL_RGBA8 : GL_RGB8);
-      auto type = hdr ? GL_FLOAT : GL_UNSIGNED_BYTE;
-      
-      glBindTexture(GL_TEXTURE_2D, frameBuffer.second->texture->glTextureId());
-      glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, m_screenSize[0] / sizeDiv, m_screenSize[1] / sizeDiv, 0, format, type, NULL);
-      if (frameBuffer.second->hasAlt) {
-        glBindTexture(GL_TEXTURE_2D, frameBuffer.second->altTexture->glTextureId());
-        glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, m_screenSize[0] / sizeDiv, m_screenSize[1] / sizeDiv, 0, format, type, NULL);
-      }
+    auto& fb = *frameBuffer.second;
+    Vec2U bufferSize = m_screenSize / sizeDiv;
+    GLenum target = fb.multisample ? GL_TEXTURE_2D_MULTISAMPLE : GL_TEXTURE_2D;
+    glBindTexture(target, fb.texture->glTextureId());
+    allocateFrameBufferStorage(target, fb.multisample, hdr, fb.alpha, bufferSize);
+    if (fb.hasAlt) {
+      glBindTexture(target, fb.altTexture->glTextureId());
+      allocateFrameBufferStorage(target, fb.multisample, hdr, fb.alpha, bufferSize);
     }
   }
 }
@@ -927,18 +989,31 @@ void OpenGlRenderer::GlTextureAtlasSet::copyAtlasPixels(
   glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
   GLenum format;
   auto pixelFormat = image.pixelFormat();
+  uint8_t const* data = image.data();
+#ifdef STAR_OPENGL_ES
+  // GLES has no BGR(A) upload formats, swap the channels on the CPU instead.
+  std::vector<uint8_t> swapped;
+  if (pixelFormat == PixelFormat::BGR24 || pixelFormat == PixelFormat::BGRA32) {
+    bool hasAlpha = pixelFormat == PixelFormat::BGRA32;
+    swapped = swapRedBlue(data, image.size(), hasAlpha ? 4 : 3);
+    data = swapped.data();
+    pixelFormat = hasAlpha ? PixelFormat::RGBA32 : PixelFormat::RGB24;
+  }
+#endif
   if (pixelFormat == PixelFormat::RGB24)
     format = GL_RGB;
   else if (pixelFormat == PixelFormat::RGBA32)
     format = GL_RGBA;
+#ifndef STAR_OPENGL_ES
   else if (pixelFormat == PixelFormat::BGR24)
     format = GL_BGR;
   else if (pixelFormat == PixelFormat::BGRA32)
     format = GL_BGRA;
+#endif
   else
     throw RendererException("Unsupported texture format in OpenGlRenderer::TextureGroup::copyAtlasPixels");
 
-  glTexSubImage2D(GL_TEXTURE_2D, 0, bottomLeft[0], bottomLeft[1], image.width(), image.height(), format, GL_UNSIGNED_BYTE, image.data());
+  glTexSubImage2D(GL_TEXTURE_2D, 0, bottomLeft[0], bottomLeft[1], image.width(), image.height(), format, GL_UNSIGNED_BYTE, data);
 }
 
 OpenGlRenderer::GlTextureGroup::GlTextureGroup(unsigned atlasNumCells)
@@ -1197,10 +1272,12 @@ bool OpenGlRenderer::logGlErrorSummary(String prefix) {
         Logger::error("GL_INVALID_FRAMEBUFFER_OPERATION");
       } else if (error == GL_OUT_OF_MEMORY) {
         Logger::error("GL_OUT_OF_MEMORY");
+#ifndef STAR_OPENGL_ES
       } else if (error == GL_STACK_UNDERFLOW) {
         Logger::error("GL_STACK_UNDERFLOW");
       } else if (error == GL_STACK_OVERFLOW) {
         Logger::error("GL_STACK_OVERFLOW");
+#endif
       } else {
         Logger::error("<UNRECOGNIZED GL ERROR>");
       }
@@ -1216,21 +1293,42 @@ void OpenGlRenderer::uploadTextureImage(PixelFormat pixelFormat, Vec2U size, uin
   Maybe<GLenum> internalFormat;
   GLenum format;
   GLenum type = GL_UNSIGNED_BYTE;
+#ifdef STAR_OPENGL_ES
+  std::vector<uint8_t> swapped;
+  if (data && (pixelFormat == PixelFormat::BGR24 || pixelFormat == PixelFormat::BGRA32)) {
+    bool hasAlpha = pixelFormat == PixelFormat::BGRA32;
+    swapped = swapRedBlue(data, size, hasAlpha ? 4 : 3);
+    data = swapped.data();
+    pixelFormat = hasAlpha ? PixelFormat::RGBA32 : PixelFormat::RGB24;
+  } else if (pixelFormat == PixelFormat::BGR24) {
+    pixelFormat = PixelFormat::RGB24;
+  } else if (pixelFormat == PixelFormat::BGRA32) {
+    pixelFormat = PixelFormat::RGBA32;
+  }
+#endif
   if (pixelFormat == PixelFormat::RGB24)
     format = GL_RGB;
   else if (pixelFormat == PixelFormat::RGBA32)
     format = GL_RGBA;
+#ifndef STAR_OPENGL_ES
   else if (pixelFormat == PixelFormat::BGR24)
     format = GL_BGR;
   else if (pixelFormat == PixelFormat::BGRA32)
     format = GL_BGRA;
+#endif
   else {
     type = GL_FLOAT;
+    // 32 bit float textures can't be filtered on GLES 3.0, half floats can
+#ifdef STAR_OPENGL_ES
+    GLenum rgbF = GL_RGB16F, rgbaF = GL_RGBA16F;
+#else
+    GLenum rgbF = GL_RGB32F, rgbaF = GL_RGBA32F;
+#endif
     if (pixelFormat == PixelFormat::RGB_F) {
-      internalFormat = GL_RGB32F;
+      internalFormat = rgbF;
       format = GL_RGB;
     } else if (pixelFormat == PixelFormat::RGBA_F) {
-      internalFormat = GL_RGBA32F;
+      internalFormat = rgbaF;
       format = GL_RGBA;
     } else
       throw RendererException("Unsupported texture format in OpenGlRenderer::uploadTextureImage");
@@ -1299,7 +1397,14 @@ auto OpenGlRenderer::createGlRenderBuffer() -> shared_ptr<GlRenderBuffer> {
 
 void OpenGlRenderer::renderGlBuffer(GlRenderBuffer const& renderBuffer, Mat3F const& transformation) {
   for (auto const& vb : renderBuffer.vertexBuffers) {
+#ifdef STAR_OPENGL_ES
+    // GLES 3.0 does not allow transposing on upload
+    Mat3F transposed = transformation;
+    transposed.transpose();
+    glUniformMatrix3fv(m_vertexTransformUniform, 1, GL_FALSE, transposed.ptr());
+#else
     glUniformMatrix3fv(m_vertexTransformUniform, 1, GL_TRUE, transformation.ptr());
+#endif
 
     if (m_currentEffect->includeVBTextures) {
       for (size_t i = 0; i < vb.textures.size(); ++i) {
