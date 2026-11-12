@@ -24,4 +24,4 @@ target_include_directories(imgui PUBLIC
 target_link_libraries(imgui PUBLIC SDL3::SDL3 Freetype::Freetype GLESv3)
 set(STAR_EXT_LIBS ${STAR_EXT_LIBS} imgui)
 # star_extern (imgui_lua_bindings) does not link STAR_EXT_LIBS, so expose the headers directory-wide too.
-include_directories(SYSTEM ${STAR_ANDROID_IMGUI_DIR})
+include_directories(SYSTEM ${STAR_ANDROID_IMGUI_DIR} ${STAR_ANDROID_IMGUI_DIR}/backends)
