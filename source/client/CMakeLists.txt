@@ -27,23 +27,33 @@ IF (STAR_SYSTEM_WINDOWS)
     )
 ENDIF ()
 
-ADD_EXECUTABLE (starbound WIN32
+SET (star_client_OBJECTS
   $<TARGET_OBJECTS:star_extern> $<TARGET_OBJECTS:star_core> $<TARGET_OBJECTS:star_base> $<TARGET_OBJECTS:star_game>
-  $<TARGET_OBJECTS:star_application> $<TARGET_OBJECTS:star_rendering> $<TARGET_OBJECTS:star_windowing> $<TARGET_OBJECTS:star_frontend>
-  ${star_client_HEADERS} ${star_client_SOURCES} ${star_client_RESOURCES})
+  $<TARGET_OBJECTS:star_application> $<TARGET_OBJECTS:star_rendering> $<TARGET_OBJECTS:star_windowing> $<TARGET_OBJECTS:star_frontend>)
+
+IF (STAR_SYSTEM_ANDROID)
+  # SDLActivity dlopen()s libmain.so and runs SDL_main from it.
+  ADD_LIBRARY (main SHARED ${star_client_OBJECTS} ${star_client_HEADERS} ${star_client_SOURCES})
+  SET (STAR_CLIENT_TARGET main)
+ELSE ()
+  ADD_EXECUTABLE (starbound WIN32 ${star_client_OBJECTS} ${star_client_HEADERS} ${star_client_SOURCES} ${star_client_RESOURCES})
+  SET (STAR_CLIENT_TARGET starbound)
+ENDIF ()
 
 IF (STAR_PRECOMPILED_HEADERS)
-  TARGET_PRECOMPILE_HEADERS (starbound REUSE_FROM star_core)
+  TARGET_PRECOMPILE_HEADERS (${STAR_CLIENT_TARGET} REUSE_FROM star_core)
 ENDIF()
 
 IF(STAR_SYSTEM_MACOS)
   SET_TARGET_PROPERTIES (starbound PROPERTIES LINK_FLAGS "-Wl,-rpath,'@executable_path'")
+ELSEIF (STAR_SYSTEM_ANDROID)
+  # nothing: the library is loaded by SDLActivity from the APK's lib dir
 ELSEIF (UNIX)
   SET_TARGET_PROPERTIES (starbound PROPERTIES LINK_FLAGS "-Wl,--export-dynamic,-rpath,'$ORIGIN'")
 ENDIF()
 
 IF (STAR_SYSTEM_MACOS)
-  SET_TARGET_PROPERTIES (starbound PROPERTIES XCODE_ATTRIBUTE_ENABLE_HARDENED_RUNTIME YES)
+  SET_TARGET_PROPERTIES (${STAR_CLIENT_TARGET} PROPERTIES XCODE_ATTRIBUTE_ENABLE_HARDENED_RUNTIME YES)
 ENDIF()
 
-TARGET_LINK_LIBRARIES (starbound ${STAR_EXT_LIBS} ${STAR_EXT_GUI_LIBS})
+TARGET_LINK_LIBRARIES (${STAR_CLIENT_TARGET} ${STAR_EXT_LIBS} ${STAR_EXT_GUI_LIBS})

@@ -27,6 +27,14 @@ namespace Star {
     return Star::runMainApplication(Star::make_unique<ApplicationClass>(), args); \
   }
 
+#elif defined STAR_SYSTEM_ANDROID
+
+// SDLActivity loads libmain.so and calls SDL_main on its own thread.
+#define STAR_MAIN_APPLICATION(ApplicationClass)                                                                   \
+  extern "C" __attribute__((visibility("default"))) int SDL_main(int argc, char** argv) {                         \
+    return Star::runMainApplication(Star::make_unique<ApplicationClass>(), Star::StringList(argc, argv));         \
+  }
+
 #else
 
 #define STAR_MAIN_APPLICATION(ApplicationClass)                                                                   \

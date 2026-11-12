@@ -76,7 +76,9 @@ if(NOT DEFINED STAR_SYSTEM)
     set(STAR_SYSTEM "windows")
   elseif(APPLE AND ${CMAKE_SYSTEM_NAME} STREQUAL "Darwin")
     set(STAR_SYSTEM "macos")
-  elseif(${CMAKE_SYSTEM_NAME} STREQUAL "Linux")
+  elseif(${CMAKE_SYSTEM_NAME} STREQUAL "Linux" OR ${CMAKE_SYSTEM_NAME} STREQUAL "Android")
+    # Android is treated as linux (kernel + posix APIs); STAR_SYSTEM_ANDROID is
+    # defined in addition for the places where bionic / the platform differ.
     set(STAR_SYSTEM "linux")
   elseif(${CMAKE_SYSTEM_NAME} STREQUAL "FreeBSD")
     set(STAR_SYSTEM "freebsd")
@@ -216,6 +218,10 @@ elseif(STAR_SYSTEM STREQUAL "netbsd")
   set_flag(STAR_SYSTEM_NETBSD)
 elseif(STAR_SYSTEM STREQUAL "haiku")
   set_flag(STAR_SYSTEM_HAIKU)
+endif()
+
+if(ANDROID)
+  set_flag(STAR_SYSTEM_ANDROID)
 endif()
 
 if(STAR_SYSTEM_FAMILY STREQUAL "windows")
@@ -453,6 +459,11 @@ if(STAR_SYSTEM_WINDOWS)
   set(CMAKE_C_STANDARD_LIBRARIES "${CMAKE_C_STANDARD_LIBRARIES} -lws2_32 -liphlpapi -lshlwapi -ldbghelp")
   set(CMAKE_CXX_STANDARD_LIBRARIES "${CMAKE_CXX_STANDARD_LIBRARIES} -lws2_32 -liphlpapi -lshlwapi -ldbghelp")
 
+elseif(STAR_SYSTEM_ANDROID)
+  # bionic has pthread, dl and rt built into libc
+  set(CMAKE_C_STANDARD_LIBRARIES "${CMAKE_C_STANDARD_LIBRARIES} -llog -landroid")
+  set(CMAKE_CXX_STANDARD_LIBRARIES "${CMAKE_CXX_STANDARD_LIBRARIES} -llog -landroid")
+
 elseif(STAR_SYSTEM_LINUX)
   set(CMAKE_C_STANDARD_LIBRARIES "${CMAKE_C_STANDARD_LIBRARIES} -lpthread -ldl -lrt")
   set(CMAKE_CXX_STANDARD_LIBRARIES "${CMAKE_CXX_STANDARD_LIBRARIES} -lpthread -ldl -lrt")
@@ -501,7 +512,9 @@ find_package(zlib-ng CONFIG REQUIRED)
 add_compile_definitions(WITH_GZFILEOP) # Needed to make zlib-ng have gz
 find_package(PNG REQUIRED)
 find_package(Freetype REQUIRED)
-find_package(cpr CONFIG REQUIRED)
+if(NOT STAR_SYSTEM_ANDROID)
+  find_package(cpr CONFIG REQUIRED)
+endif()
 find_package(OggVorbis REQUIRED)
 find_package(zstd CONFIG REQUIRED)
 if (NOT STAR_SYSTEM_HAIKU)
@@ -516,7 +529,7 @@ include_directories(SYSTEM
 set(STAR_EXT_LIBS ${STAR_EXT_LIBS}
     zlib-ng::zlib
     PNG::PNG
-    cpr::cpr
+    $<TARGET_NAME_IF_EXISTS:cpr::cpr>
     $<IF:$<TARGET_EXISTS:Freetype::Freetype>,Freetype::Freetype,freetype>
     $<IF:$<TARGET_EXISTS:zstd::libzstd_shared>,zstd::libzstd_shared,zstd::libzstd_static>
     $<IF:$<TARGET_EXISTS:Opus::opus>,Opus::opus,opus>
@@ -526,14 +539,16 @@ set(STAR_EXT_LIBS ${STAR_EXT_LIBS}
     ${OGG_LIBRARY}
 )
 
-pkg_check_modules(PKG_WAYLAND "wayland-client>=1.18" wayland-egl wayland-cursor egl "xkbcommon>=0.5.0")
+if(NOT STAR_SYSTEM_ANDROID)
+  pkg_check_modules(PKG_WAYLAND "wayland-client>=1.18" wayland-egl wayland-cursor egl "xkbcommon>=0.5.0")
+endif()
 if (PKG_WAYLAND_FOUND)
   message(STATUS "Wayland was found")
 else()
   message(STATUS "Wayland was not found")
 endif()
 
-if(STAR_SYSTEM_FAMILY STREQUAL "unix" AND NOT STAR_SYSTEM_HAIKU)
+if(STAR_SYSTEM_FAMILY STREQUAL "unix" AND NOT STAR_SYSTEM_HAIKU AND NOT STAR_SYSTEM_ANDROID)
   set_flag(STAR_USE_CPPTRACE)
   find_package(cpptrace CONFIG REQUIRED)
   set(STAR_EXT_LIBS ${STAR_EXT_LIBS} cpptrace::cpptrace)
@@ -548,14 +563,19 @@ if(STAR_BUILD_GUI)
     $<IF:$<TARGET_EXISTS:SDL3::SDL3>,SDL3::SDL3,SDL3::SDL3-static>
   )
 
-  find_package(OpenGL REQUIRED)
-  find_package(GLEW REQUIRED)
+  if(STAR_SYSTEM_ANDROID)
+    # OpenGL ES 3.0 straight from the system libraries, no GLEW.
+    set(STAR_EXT_GUI_LIBS ${STAR_EXT_GUI_LIBS} GLESv3 EGL)
+  else()
+    find_package(OpenGL REQUIRED)
+    find_package(GLEW REQUIRED)
 
-  include_directories(SYSTEM ${GLEW_INCLUDE_DIR})
-  set(STAR_EXT_GUI_LIBS ${STAR_EXT_GUI_LIBS}
-      ${OPENGL_LIBRARY}
-      $<IF:$<TARGET_EXISTS:GLEW::glew_s>,GLEW::glew_s,GLEW>
-  )
+    include_directories(SYSTEM ${GLEW_INCLUDE_DIR})
+    set(STAR_EXT_GUI_LIBS ${STAR_EXT_GUI_LIBS}
+        ${OPENGL_LIBRARY}
+        $<IF:$<TARGET_EXISTS:GLEW::glew_s>,GLEW::glew_s,GLEW>
+    )
+  endif()
 
   if(STAR_SYSTEM_MACOS)
     set(STAR_EXT_GUI_LIBS ${STAR_EXT_GUI_LIBS} "-framework CoreAudio")
@@ -580,6 +600,10 @@ set(BUILD_SHARED_LIBS false)
 
 # First set output dir for the generic no-config case (e.g. macos / linux)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/../dist)
+
+if(STAR_SYSTEM_ANDROID)
+  set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/../dist/android/${ANDROID_ABI})
+endif()
 
 # Second, set output dir for multi-config builds (e.g. msvc)
 foreach(OUTPUTCONFIG ${CMAKE_CONFIGURATION_TYPES})
@@ -629,11 +653,13 @@ if(BUILD_TESTING)
   add_subdirectory(test)
 endif()
 
-# Starbound stand-alone server.
-add_subdirectory(server)
+if(NOT STAR_SYSTEM_ANDROID)
+  # Starbound stand-alone server.
+  add_subdirectory(server)
 
-# cmdline utilities
-add_subdirectory(utility)
+  # cmdline utilities
+  add_subdirectory(utility)
+endif()
 
 if(STAR_BUILD_GUI)
   # Handles creating windows, keyboard / mouse / joystick input, and the 2d

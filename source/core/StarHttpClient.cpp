@@ -2,7 +2,9 @@
 #include "StarLogging.hpp"
 #include "StarFormat.hpp"
 #include "StarWorkerPool.hpp"
+#ifndef STAR_SYSTEM_ANDROID
 #include <cpr/cpr.h>
+#endif
 
 namespace Star {
 
@@ -14,6 +16,17 @@ WorkerPool& HttpClient::workerPool() {
 HttpClient::HttpClient() = default;
 
 HttpClient::~HttpClient() = default;
+
+#ifdef STAR_SYSTEM_ANDROID
+
+// The Android build is fully offline and does not ship an HTTP stack.
+static HttpResponse performRequest(HttpRequest const&) {
+  HttpResponse response;
+  response.error = "HTTP requests are not available in the offline Android build";
+  return response;
+}
+
+#else
 
 static HttpResponse performRequest(HttpRequest const& req) {
   HttpResponse response;
@@ -85,6 +98,8 @@ static HttpResponse performRequest(HttpRequest const& req) {
 
   return response;
 }
+
+#endif
 
 WorkerPoolPromise<HttpResponse> HttpClient::requestAsync(HttpRequest const& request) {
   return workerPool().addProducer<HttpResponse>([request]() {

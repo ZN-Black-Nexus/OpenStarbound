@@ -6,6 +6,9 @@
 #ifdef STAR_USE_CPPTRACE
 #include "cpptrace/cpptrace.hpp"
 #include "cpptrace/formatting.hpp"
+#elif defined STAR_SYSTEM_ANDROID
+#include <dlfcn.h>
+#include <unwind.h>
 #else
 #include <execinfo.h>
 #endif
@@ -28,6 +31,50 @@ static size_t const StackLimit = 256;
 
 typedef pair<Array<void*, StackLimit>, size_t> StackCapture;
 
+#ifdef STAR_SYSTEM_ANDROID
+
+// bionic only ships execinfo.h from API 33, so walk the stack with libgcc's unwinder.
+struct UnwindState {
+  StackCapture* capture;
+};
+
+static _Unwind_Reason_Code unwindCallback(_Unwind_Context* context, void* arg) {
+  auto state = static_cast<UnwindState*>(arg);
+  if (state->capture->second >= StackLimit)
+    return _URC_END_OF_STACK;
+  if (auto pc = _Unwind_GetIP(context))
+    state->capture->first.ptr()[state->capture->second++] = reinterpret_cast<void*>(pc);
+  return _URC_NO_REASON;
+}
+
+inline StackCapture captureStack() {
+  StackCapture stackCapture;
+  stackCapture.second = 0;
+  UnwindState state{&stackCapture};
+  _Unwind_Backtrace(unwindCallback, &state);
+  return stackCapture;
+}
+
+OutputProxy outputStack(StackCapture stack) {
+  return OutputProxy([stack = std::move(stack)](std::ostream & os) {
+      for (size_t i = 0; i < stack.second; ++i) {
+        Dl_info info;
+        void* addr = stack.first.ptr()[i];
+        if (dladdr(addr, &info) && info.dli_sname)
+          os << info.dli_fname << "(" << info.dli_sname << "+" << ((char*)addr - (char*)info.dli_saddr) << ")";
+        else
+          os << addr;
+        if (i + 1 < stack.second)
+          os << std::endl;
+      }
+
+      if (stack.second == StackLimit)
+        os << std::endl << "[Stack Output Limit Reached]";
+    });
+}
+
+#else
+
 inline StackCapture captureStack() {
   StackCapture stackCapture;
   stackCapture.second = backtrace(stackCapture.first.ptr(), StackLimit);
@@ -49,6 +96,8 @@ OutputProxy outputStack(StackCapture stack) {
       ::free(symbols);
     });
 }
+
+#endif
   
 #endif
 
