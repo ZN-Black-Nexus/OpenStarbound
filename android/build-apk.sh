@@ -40,6 +40,12 @@ LIBMAIN="$OUT/$ABI/libmain.so"
 [ -f "$LIBMAIN" ] || LIBMAIN="$ROOT/dist/android/$ABI/libmain.so"
 [ -f "$LIBMAIN" ] || { echo "libmain.so not found" >&2; exit 1; }
 
+# the unstripped library carries ~700 MB of debug info
+STRIP="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+mkdir -p "$STAGE/lib"
+"$STRIP" --strip-unneeded -o "$STAGE/lib/libmain.so" "$LIBMAIN"
+LIBMAIN="$STAGE/lib/libmain.so"
+
 echo "== java"
 # SDL's Java layer plus ours
 javac -source 8 -target 8 -Xlint:-options -d "$STAGE/classes" -classpath "$PLATFORM_JAR" \
