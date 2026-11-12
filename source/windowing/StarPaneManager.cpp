@@ -257,8 +257,12 @@ float PaneManager::effectiveScale(PanePtr const& pane) const {
     // whole step. The tolerance keeps window-sized panes (sized from the
     // current scale, rounded up) from shrinking themselves.
     float fit = std::min(window[0] / size[0], window[1] / size[1]);
-    if (fit >= global * 0.98f)
-      return global;
+    if (fit >= global * 0.98f) {
+      // Room to spare: enlarge menus and windows past the chosen scale so
+      // their buttons are finger sized, without zooming the HUD or the world.
+      float enlarged = std::floor(std::min(global * 1.75f, fit * 0.96f) * 2.0f) / 2.0f;
+      return std::max(global, enlarged);
+    }
     return std::max(1.0f, std::floor(fit * 8.0f) / 8.0f);
   }
 #else
@@ -548,6 +552,9 @@ void PaneManager::render() {
           pane->setPosition(Vec2I((windowSize() - pane->size()) / 2));
         else if (scale != lastScale)
           pane->setPosition(calculateNewInterfacePosition(pane, scale / lastScale));
+
+        if (scale > globalScale && pane->anchor() == PaneAnchor::None)
+          pane->setPosition(pane->position().piecewiseClamp(Vec2I(), Vec2I().piecewiseMax(windowSize() - pane->size())));
 
         newScales[pane.get()] = scale;
         pane->setDrawingOffset(calculatePaneOffset(pane));
