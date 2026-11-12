@@ -10,6 +10,11 @@
 #include "SDL3/SDL.h"
 #include "StarPlatformServices_pc.hpp"
 
+#ifdef STAR_SYSTEM_ANDROID
+#include "StarAndroidSetup.hpp"
+#include "StarTouchControls.hpp"
+#endif
+
 #ifdef STAR_SYSTEM_WINDOWS
 #include <dwmapi.h>
 #include <objidl.h>
@@ -465,8 +470,17 @@ public:
     if (!SDL_Init(0))
       throw ApplicationException(strf("Couldn't initialize SDL: {}", SDL_GetError()));
 
+#ifdef STAR_SYSTEM_ANDROID
+    // Touch events are handled by TouchControls, not converted to mouse events by SDL
+    SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
+    SDL_SetHint(SDL_HINT_MOUSE_TOUCH_EVENTS, "0");
+    SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
+    SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");
+    prepareAndroidDataDirectory();
+#else
     if (auto basePath = SDL_GetBasePath())
       File::changeDirectory(basePath);
+#endif
 
     m_signalHandler.setHandleInterrupt(true);
     m_signalHandler.setHandleFatal(true);
@@ -478,7 +492,7 @@ public:
       throw ApplicationException("Application threw exception during startup", e);
     }
 
-#ifdef STAR_SYSTEM_LINUX
+#if defined(STAR_SYSTEM_LINUX) && !defined(STAR_SYSTEM_ANDROID)
     SDL_SetHint(SDL_HINT_VIDEO_WAYLAND_SCALE_TO_DISPLAY, "1");
 #endif
     
@@ -507,7 +521,11 @@ public:
       Logger::info("Application: No platform services available");
 
     Logger::info("Application: Creating SDL window");
-#ifdef STAR_SYSTEM_MACOS
+#ifdef STAR_SYSTEM_ANDROID
+    // size 0,0 + fullscreen = native display size
+    m_sdlWindow = SDL_CreateWindow(m_windowTitle.utf8Ptr(), 0, 0, SDL_WINDOW_OPENGL | SDL_WINDOW_FULLSCREEN | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    m_windowMode = WindowMode::Fullscreen;
+#elif defined(STAR_SYSTEM_MACOS)
     m_sdlWindow = SDL_CreateWindow(m_windowTitle.utf8Ptr(), m_windowSize[0], m_windowSize[1], SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
 #else
     m_sdlWindow = SDL_CreateWindow(m_windowTitle.utf8Ptr(), m_windowSize[0], m_windowSize[1], SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
@@ -519,7 +537,7 @@ public:
     m_displayScale = SDL_GetWindowDisplayScale(m_sdlWindow);
 #endif
     
-#ifdef STAR_SYSTEM_LINUX
+#if defined(STAR_SYSTEM_LINUX) && !defined(STAR_SYSTEM_ANDROID)
     if (File::isFile(".icon/openstarbound.png")) {
       auto device = File::open(".icon/openstarbound.png", IOMode::Read);
       if (device && Image::isPng(device)) {
@@ -579,6 +597,16 @@ public:
 #endif
 
     Logger::info("Application: Creating SDL OpenGL context");
+#ifdef STAR_SYSTEM_ANDROID
+    static const std::pair<int,int> versions[] = {{3,2},{3,1},{3,0}};
+    for (auto& [majorVersion, minorVersion] : versions) {
+      SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+      SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, majorVersion);
+      SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, minorVersion);
+      m_sdlGlContext = SDL_GL_CreateContext(m_sdlWindow);
+      if (m_sdlGlContext) break;
+    }
+#else
     static const std::pair<int,int> versions[] = {{4,6},{4,5},{4,4},{4,3},{4,2},{4,1},{4,0},{3,3},{3,2},{3,1}};
     for (auto& [majorVersion, minorVersion] : versions) {
       SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);
@@ -588,6 +616,7 @@ public:
       m_sdlGlContext = SDL_GL_CreateContext(m_sdlWindow);
       if (m_sdlGlContext) break;
     }
+#endif
     if (!m_sdlGlContext)
       throw ApplicationException::format("Application: Could not create OpenGL context: {}", SDL_GetError());
 
@@ -626,6 +655,10 @@ public:
     m_renderer = make_shared<OpenGlRenderer>();
     m_renderer->setScreenSize(m_windowSize);
 
+#ifdef STAR_SYSTEM_ANDROID
+    m_touchControls.setScreenSize(m_windowSize);
+#endif
+
     m_cursorCache.setTimeToLive(30000);
 
     IMGUI_CHECKVERSION();
@@ -636,6 +669,8 @@ public:
     ImGui::StyleColorsDark();
     ImGuiStyle& style = ImGui::GetStyle();
     float main_scale = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
+    if (main_scale <= 0.0f)
+      main_scale = 1.0f;
     style.ScaleAllSizes(main_scale);
 
     ImGui_ImplSDL3_InitForOpenGL(m_sdlWindow, m_sdlGlContext);
@@ -751,6 +786,10 @@ public:
         m_application->render();
         m_renderer->finishFrame();
 
+#ifdef STAR_SYSTEM_ANDROID
+        if (!m_acceptingTextInput)
+          m_touchControls.draw(ImGui::GetForegroundDrawList());
+#endif
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         SDL_GL_SwapWindow(m_sdlWindow);
@@ -852,6 +891,9 @@ private:
     }
 
     void setFullscreenWindow(Vec2U fullScreenResolution) override {
+#ifdef STAR_SYSTEM_ANDROID
+      return; // the window is always fullscreen on Android
+#endif
       if (parent->m_windowMode != WindowMode::Fullscreen || parent->m_windowSize != fullScreenResolution) {
         int currentDisplayIndex = SDL_GetDisplayForWindow(parent->m_sdlWindow);
 
@@ -887,6 +929,9 @@ private:
     }
 
     void setNormalWindow(Vec2U windowSize) override {
+#ifdef STAR_SYSTEM_ANDROID
+      return; // the window is always fullscreen on Android
+#endif
       auto window = parent->m_sdlWindow;
       if (parent->m_windowMode != WindowMode::Normal || parent->m_windowSize != windowSize) {
         if (parent->m_windowMode == WindowMode::Fullscreen)
@@ -906,6 +951,9 @@ private:
     }
 
     void setMaximizedWindow() override {
+#ifdef STAR_SYSTEM_ANDROID
+      return; // the window is always fullscreen on Android
+#endif
       if (parent->m_windowMode != WindowMode::Maximized) {
         if (parent->m_windowMode == WindowMode::Fullscreen)
           SDL_SetWindowFullscreen(parent->m_sdlWindow, 0);
@@ -919,6 +967,9 @@ private:
     }
 
     void setBorderlessWindow() override {
+#ifdef STAR_SYSTEM_ANDROID
+      return; // the window is always fullscreen on Android
+#endif
       if (parent->m_windowMode != WindowMode::Borderless) {
         if (parent->m_windowMode == WindowMode::Fullscreen)
           SDL_SetWindowFullscreen(parent->m_sdlWindow, 0);
@@ -1080,6 +1131,23 @@ private:
       SDL_ConvertEventToRenderCoordinates(SDL_GetRenderer(m_sdlWindow), &event);
       ImGui_ImplSDL3_ProcessEvent(&event);
       Maybe<InputEvent> starEvent;
+#ifdef STAR_SYSTEM_ANDROID
+      if (m_touchControls.processEvent(event, inputEvents))
+        continue;
+      if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST || event.type == SDL_EVENT_WILL_ENTER_BACKGROUND)
+        m_touchControls.releaseAll(inputEvents);
+      if ((event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP) && event.key.key == SDLK_AC_BACK) {
+        if (event.type == SDL_EVENT_KEY_DOWN) {
+          if (!event.key.repeat)
+            starEvent.set(KeyDownEvent{Key::Escape, KeyMod::NoMod});
+        } else {
+          starEvent.set(KeyUpEvent{Key::Escape});
+        }
+        if (starEvent)
+          inputEvents.append(starEvent.take());
+        continue;
+      }
+#endif
       if (event.type == SDL_EVENT_WINDOW_MAXIMIZED || event.type == SDL_EVENT_WINDOW_RESTORED) {
         auto windowFlags = SDL_GetWindowFlags(m_sdlWindow);
 
@@ -1096,6 +1164,9 @@ private:
       } else if (event.type == SDL_EVENT_WINDOW_RESIZED || event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
         m_windowSize = Vec2U(event.window.data1, event.window.data2);
         m_renderer->setScreenSize(m_windowSize);
+#ifdef STAR_SYSTEM_ANDROID
+        m_touchControls.setScreenSize(m_windowSize);
+#endif
         m_application->windowChanged(m_windowMode, m_windowSize);
       }
 #ifndef STAR_SYSTEM_MACOS
@@ -1357,6 +1428,9 @@ private:
   OpenGlRendererPtr m_renderer;
   ApplicationUPtr m_application;
   PcPlatformServicesUPtr m_platformServices;
+#ifdef STAR_SYSTEM_ANDROID
+  TouchControls m_touchControls;
+#endif
 };
 
 int runMainApplication(ApplicationUPtr application, StringList cmdLineArgs) {
