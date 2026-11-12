@@ -61,16 +61,37 @@ void extractBundledAssets(String const& dataDir) {
   File::writeFile(stampString, stampFile);
 }
 
+// The launcher records the chosen volume (phone storage or SD card) in
+// <internal files dir>/datadir.txt; falls back to the default external dir.
+String chooseDataDirectory() {
+  char const* internal = SDL_GetAndroidInternalStoragePath();
+  if (internal) {
+    String choiceFile = File::relativeTo(internal, "datadir.txt");
+    if (File::isFile(choiceFile)) {
+      String chosen = File::readFileString(choiceFile).trim();
+      if (!chosen.empty()) {
+        try {
+          File::makeDirectoryRecursive(chosen);
+          if (File::isDirectory(chosen))
+            return chosen;
+        } catch (StarException const& e) {
+          Logger::warn("Android: chosen data directory '{}' unusable: {}", chosen, e.what());
+        }
+      }
+    }
+  }
+  char const* path = SDL_GetAndroidExternalStoragePath();
+  if (!path)
+    path = internal;
+  if (!path)
+    throw StarException("Android: no writable storage path available");
+  return String(path);
+}
+
 }
 
 String prepareAndroidDataDirectory() {
-  char const* path = SDL_GetAndroidExternalStoragePath();
-  if (!path)
-    path = SDL_GetAndroidInternalStoragePath();
-  if (!path)
-    throw StarException("Android: no writable storage path available");
-
-  String dataDir(path);
+  String dataDir = chooseDataDirectory();
   File::makeDirectoryRecursive(dataDir);
   File::changeDirectory(dataDir);
 

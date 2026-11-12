@@ -40,9 +40,7 @@ public class LauncherActivity extends Activity {
     private Button[] actionButtons;
 
     private File dataDir() {
-        File dir = getExternalFilesDir(null);
-        if (dir == null) dir = getFilesDir();
-        return dir;
+        return DataLocation.resolve(this);
     }
 
     private File assetsDir() { File d = new File(dataDir(), "assets"); d.mkdirs(); return d; }
@@ -78,8 +76,9 @@ public class LauncherActivity extends Activity {
         Button importPak = button("Import packed.pak", v -> pick(REQ_PAK, false));
         Button addMods = button("Add mods (.pak)", v -> pick(REQ_MODS, true));
         Button removeMods = button("Remove mods", v -> removeModsDialog());
+        Button storage = button("Storage location", v -> storageDialog());
         Button viewLog = button("View last log", v -> showLog());
-        actionButtons = new Button[] { playButton, importPak, addMods, removeMods, viewLog };
+        actionButtons = new Button[] { playButton, importPak, addMods, removeMods, storage, viewLog };
         for (Button b : actionButtons) root.addView(b);
 
         TextView note = new TextView(this);
@@ -104,6 +103,12 @@ public class LauncherActivity extends Activity {
 
     private void refresh() {
         StringBuilder sb = new StringBuilder();
+        try {
+            DataLocation.save(this, dataDir());
+        } catch (Exception e) {
+            sb.append("Could not save storage choice: ").append(e.getMessage()).append("\n");
+        }
+        sb.append("Data: ").append(dataDir().getAbsolutePath()).append("\n");
         File pak = packedPak();
         boolean havePak = pak.isFile() && pak.length() > 0;
         if (havePak)
@@ -252,6 +257,41 @@ public class LauncherActivity extends Activity {
         File[] children = f.listFiles();
         if (children != null) for (File c : children) deleteRecursive(c);
         f.delete();
+    }
+
+    private void storageDialog() {
+        final java.util.List<DataLocation.Volume> vols = DataLocation.volumes(this);
+        final File current = dataDir();
+        String[] names = new String[vols.size()];
+        for (int i = 0; i < names.length; i++) {
+            DataLocation.Volume v = vols.get(i);
+            names[i] = v.label + (v.dir.equals(current) ? " (current)" : "") + "\n"
+                + (DataLocation.freeSpace(v.dir) >> 20) + " MB free";
+        }
+        new AlertDialog.Builder(this)
+            .setTitle("Store game data on...")
+            .setItems(names, (d, which) -> {
+                final File target = vols.get(which).dir;
+                if (target.equals(current)) return;
+                setBusy(true);
+                new Thread(() -> {
+                    String message;
+                    try {
+                        DataLocation.move(current, target, text -> runOnUiThread(() -> progress.setText(text)));
+                        DataLocation.save(this, target);
+                        message = "Data moved to " + target.getAbsolutePath();
+                    } catch (Exception e) {
+                        message = "Move failed (original data kept): " + e.getMessage();
+                    }
+                    final String finalMessage = message;
+                    runOnUiThread(() -> {
+                        progress.setText(finalMessage);
+                        setBusy(false);
+                    });
+                }).start();
+            })
+            .setNegativeButton("Cancel", null)
+            .show();
     }
 
     private void showLog() {
