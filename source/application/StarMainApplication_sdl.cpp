@@ -1088,7 +1088,12 @@ private:
     }
 
   float getDisplayScale() const override {
+#ifdef STAR_SYSTEM_ANDROID
+    // The density multiplier would stack on top of the automatic interface scale and make the UI several times larger than the screen.
+    return 1.0f;
+#else
     return parent->m_displayScale;
+#endif
   }
 
     StatisticsServicePtr statisticsService() const override {

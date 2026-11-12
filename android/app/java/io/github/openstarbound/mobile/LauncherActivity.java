@@ -2,6 +2,9 @@ package io.github.openstarbound.mobile;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
 import android.content.Intent;
 import android.database.Cursor;
 import android.net.Uri;
@@ -19,6 +22,7 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.RandomAccessFile;
 import java.util.ArrayList;
 import java.util.Arrays;
 
@@ -74,7 +78,8 @@ public class LauncherActivity extends Activity {
         Button importPak = button("Import packed.pak", v -> pick(REQ_PAK, false));
         Button addMods = button("Add mods (.pak)", v -> pick(REQ_MODS, true));
         Button removeMods = button("Remove mods", v -> removeModsDialog());
-        actionButtons = new Button[] { playButton, importPak, addMods, removeMods };
+        Button viewLog = button("View last log", v -> showLog());
+        actionButtons = new Button[] { playButton, importPak, addMods, removeMods, viewLog };
         for (Button b : actionButtons) root.addView(b);
 
         TextView note = new TextView(this);
@@ -247,6 +252,42 @@ public class LauncherActivity extends Activity {
         File[] children = f.listFiles();
         if (children != null) for (File c : children) deleteRecursive(c);
         f.delete();
+    }
+
+    private void showLog() {
+        File log = new File(new File(dataDir(), "logs"), "starbound.log");
+        String text;
+        if (!log.isFile()) {
+            text = "No log yet: " + log.getAbsolutePath();
+        } else {
+            try (RandomAccessFile f = new RandomAccessFile(log, "r")) {
+                int len = (int) Math.min(f.length(), 24 * 1024);
+                byte[] buf = new byte[len];
+                f.seek(f.length() - len);
+                f.readFully(buf);
+                text = new String(buf, "UTF-8");
+            } catch (Exception e) {
+                text = "Could not read log: " + e;
+            }
+        }
+        final String shown = text;
+        TextView tv = new TextView(this);
+        tv.setText(shown);
+        tv.setTextSize(10);
+        tv.setTypeface(android.graphics.Typeface.MONOSPACE);
+        tv.setTextIsSelectable(true);
+        ScrollView sv = new ScrollView(this);
+        sv.addView(tv);
+        new AlertDialog.Builder(this)
+            .setTitle("starbound.log (end)")
+            .setView(sv)
+            .setPositiveButton("Copy", (d, w) -> {
+                ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                cm.setPrimaryClip(ClipData.newPlainText("starbound.log", shown));
+                progress.setText("Log copied to clipboard.");
+            })
+            .setNegativeButton("Close", null)
+            .show();
     }
 
     private void startGame() {
