@@ -459,7 +459,7 @@ void ClientApplication::render() {
     else
       paneManager = m_mainInterface ? m_mainInterface->paneManager() : nullptr;
     if (paneManager) {
-      Vec2F pane = Vec2F(paneManager->largestWindowSize());
+      Vec2F pane = Vec2F(paneManager->largestWindowSize()) * 1.04f;  // small margin for widgets outside the pane's background
       Vec2F window = Vec2F(m_guiContext->windowSize());
       if (pane[0] > 0 && pane[1] > 0) {
         float fit = std::max(1.0f, std::floor(std::min(window[0] / pane[0], window[1] / pane[1]) + 0.05f));

@@ -29,6 +29,7 @@ TitleScreen::TitleScreen(PlayerStoragePtr playerStorage, MixerPtr mixer, Univers
   auto assets = Root::singleton().assets();
 
   m_guiContext = GuiContext::singletonPtr();
+  m_paneManager.setTouchAssistHud(true);
 
   m_celestialDatabase = make_shared<CelestialMasterDatabase>();
   auto randomWorld = m_celestialDatabase->findRandomWorld(10, 50, [this](CelestialCoordinate const& coordinate) {

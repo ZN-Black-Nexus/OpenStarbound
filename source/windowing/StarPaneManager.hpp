@@ -81,6 +81,10 @@ public:
   void render();
   void update(float dt);
 
+  // Touch assist (tap snapping, scale fitting) normally looks at Window and
+  // ModalWindow panes only; menus built from Hud panes (title screen) opt in.
+  void setTouchAssistHud(bool enabled) { m_touchAssistHud = enabled; }
+
   // Size of the largest open Window / ModalWindow pane, in interface units.
   Vec2I largestWindowSize() const;
 
@@ -99,6 +103,7 @@ private:
 
   // Touch tap-snapping: offset in window pixels applied to mouse events while a
   // touch is down so that a tap near a button lands on it.
+  bool m_touchAssistHud = false;
   bool m_touchDown = false;
   Vec2F m_touchSnapOffset;
 

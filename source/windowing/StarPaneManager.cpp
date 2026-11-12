@@ -214,7 +214,9 @@ namespace {
 
 Vec2I PaneManager::largestWindowSize() const {
   Vec2I result;
-  for (auto layer : {PaneLayer::ModalWindow, PaneLayer::Window}) {
+  for (auto layer : {PaneLayer::ModalWindow, PaneLayer::Window, PaneLayer::Hud}) {
+    if (layer == PaneLayer::Hud && !m_touchAssistHud)
+      continue;
     auto layerIt = m_displayedPanes.find(layer);
     if (layerIt == m_displayedPanes.end())
       continue;
@@ -232,7 +234,9 @@ Maybe<Vec2F> PaneManager::findSnapTarget(Vec2F interfacePos, float maxDistance) 
   float bestDist = maxDistance;
   bool foundModal = false;
 
-  for (auto layer : {PaneLayer::ModalWindow, PaneLayer::Window}) {
+  for (auto layer : {PaneLayer::ModalWindow, PaneLayer::Window, PaneLayer::Hud}) {
+    if (layer == PaneLayer::Hud && !m_touchAssistHud)
+      continue;
     auto layerIt = m_displayedPanes.find(layer);
     if (layerIt == m_displayedPanes.end())
       continue;
