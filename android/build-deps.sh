@@ -32,6 +32,7 @@ OGG_REPO=https://github.com/xiph/ogg.git;                    OGG_TAG=v1.3.6
 VORBIS_REPO=https://github.com/xiph/vorbis.git;              VORBIS_TAG=v1.3.7
 ZLIBNG_REPO=https://github.com/zlib-ng/zlib-ng.git;          ZLIBNG_TAG=2.3.3
 PNG_REPO=https://github.com/pnggroup/libpng.git;             PNG_TAG=v1.6.59
+BROTLI_REPO=https://github.com/google/brotli.git;          BROTLI_TAG=v1.1.0
 FT_REPO=https://github.com/freetype/freetype.git;            FT_TAG=VER-2-14-3
 OPUS_REPO=https://github.com/xiph/opus.git;                  OPUS_TAG=v1.6.1
 ZSTD_REPO=https://github.com/facebook/zstd.git;              ZSTD_TAG=v1.5.7
@@ -78,6 +79,7 @@ fetch ogg      "$OGG_REPO"      "$OGG_TAG"
 fetch vorbis   "$VORBIS_REPO"   "$VORBIS_TAG"
 fetch zlibng   "$ZLIBNG_REPO"   "$ZLIBNG_TAG"
 fetch png      "$PNG_REPO"      "$PNG_TAG"
+fetch brotli   "$BROTLI_REPO"   "$BROTLI_TAG"
 fetch freetype "$FT_REPO"       "$FT_TAG"
 fetch opus     "$OPUS_REPO"     "$OPUS_TAG"
 fetch zstd     "$ZSTD_REPO"     "$ZSTD_TAG"
@@ -99,8 +101,12 @@ build zlibng . -DZLIB_COMPAT=OFF -DWITH_GZFILEOP=ON -DZLIB_ENABLE_TESTS=OFF -DWI
 build png . -DPNG_SHARED=OFF -DPNG_STATIC=ON -DPNG_TESTS=OFF -DPNG_TOOLS=OFF -DPNG_FRAMEWORK=OFF \
   -DPNG_HARDWARE_OPTIMIZATIONS=ON
 
-build freetype . -DFT_DISABLE_BZIP2=ON -DFT_DISABLE_BROTLI=ON -DFT_DISABLE_HARFBUZZ=ON \
-  -DFT_DISABLE_PNG=ON
+# The game's fonts are woff2, which FreeType can only read with Brotli.
+build brotli . -DBROTLI_DISABLE_TESTS=ON -DBROTLI_BUNDLED_MODE=OFF
+
+build freetype . -DFT_DISABLE_BZIP2=ON -DFT_REQUIRE_BROTLI=ON -DFT_DISABLE_HARFBUZZ=ON \
+  -DFT_DISABLE_PNG=ON -DBROTLIDEC_INCLUDE_DIRS="$PREFIX/include" \
+  -DBROTLIDEC_LIBRARIES="$PREFIX/lib/libbrotlidec.a;$PREFIX/lib/libbrotlicommon.a"
 
 build opus . -DOPUS_BUILD_PROGRAMS=OFF -DOPUS_BUILD_TESTING=OFF -DOPUS_INSTALL_PKG_CONFIG_MODULE=OFF
 

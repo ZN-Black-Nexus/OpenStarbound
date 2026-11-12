@@ -26,3 +26,9 @@ target_link_libraries(imgui PUBLIC SDL3::SDL3 Freetype::Freetype GLESv3)
 set(STAR_EXT_LIBS ${STAR_EXT_LIBS} imgui)
 # star_extern (imgui_lua_bindings) does not link STAR_EXT_LIBS, so expose the headers directory-wide too.
 include_directories(SYSTEM ${STAR_ANDROID_IMGUI_DIR} ${STAR_ANDROID_IMGUI_DIR}/backends)
+
+# The woff2 fonts need FreeType built with Brotli (see android/build-deps.sh);
+# the static FreeType found above doesn't carry that dependency along.
+find_library(STAR_BROTLIDEC brotlidec REQUIRED)
+find_library(STAR_BROTLICOMMON brotlicommon REQUIRED)
+set(STAR_EXT_LIBS ${STAR_EXT_LIBS} ${STAR_BROTLIDEC} ${STAR_BROTLICOMMON})
