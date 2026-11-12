@@ -88,8 +88,12 @@ public:
 
 private:
   bool handleInputEvent(InputEvent const& event);
-  InputEvent snapTouchEvent(InputEvent const& event);
-  Maybe<Vec2F> findSnapTarget(Vec2F pixelPos, float maxPixelDistance) const;
+  bool handleTouchEvent(InputEvent const& event);
+  void updateTouch();
+  Maybe<Vec2F> findSnapTarget(Vec2F pixelPos, float maxPixelDistance, bool* onButton = nullptr) const;
+  // Topmost pane under a window pixel position, honoring per-pane scale.
+  PanePtr paneAtPixels(Vec2F pixelPos, bool touchLayersOnly) const;
+  bool touchLayer(PaneLayer layer) const;
   // Interface scale this pane is drawn and hit-tested at. Panes too big to fit
   // the window at the global scale get their own smaller scale (Android only).
   float effectiveScale(PanePtr const& pane) const;
@@ -102,12 +106,21 @@ private:
   GuiContext* m_context;
   float m_prevInterfaceScale;
 
-  // Touch tap-snapping: offset in window pixels applied to mouse events while a
-  // touch is down so that a tap near a button lands on it.
   HashMap<Pane const*, float> m_paneScales;
+
+  // Touch gestures over panes: a press is held back until it resolves into a
+  // tap (snapped to the nearest button), a drag, a scroll of the scroll area
+  // under the finger, or a long press (right click).
+  enum class TouchPhase { None, Pending, Dragging, Scrolling, Consumed, Passthrough };
   bool m_touchAssistHud = false;
-  bool m_touchDown = false;
-  Vec2F m_touchSnapOffset;
+  TouchPhase m_touchPhase = TouchPhase::None;
+  Vec2F m_touchStart;
+  Vec2F m_touchLast;
+  double m_touchStartTime = 0.0;
+  WidgetPtr m_touchScrollArea;
+  float m_touchScrollScale = 1.0f;
+  Vec2F m_touchScrollRemainder;
+  Vec2F m_tooltipLastMousePixels;
 
   // Map of each pane layer, where the 0th pane is the topmost pane in each layer.
   Map<PaneLayer, OrderedMap<PanePtr, DismissCallback>> m_displayedPanes;

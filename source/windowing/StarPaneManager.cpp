@@ -4,6 +4,8 @@
 #include "StarAssets.hpp"
 #include "StarRoot.hpp"
 #include "StarButtonWidget.hpp"
+#include "StarScrollArea.hpp"
+#include "StarTime.hpp"
 
 namespace Star {
 
@@ -212,6 +214,24 @@ namespace {
       collectButtons(widget->getChildNum(i), out);
   }
 
+  // Deepest scrollable ScrollArea whose content region contains the position.
+  shared_ptr<ScrollArea> findScrollArea(WidgetPtr const& widget, Vec2I const& pos) {
+    if (!widget || !widget->visibility())
+      return {};
+    for (size_t i = 0; i < widget->numChildren(); ++i) {
+      if (auto found = findScrollArea(widget->getChildNum(i), pos))
+        return found;
+    }
+    if (auto area = as<ScrollArea>(widget)) {
+      Vec2I areaSize = area->areaSize();
+      Vec2I min = area->screenPosition() + Vec2I(0, area->size()[1] - areaSize[1]);
+      Vec2I maxScroll = area->maxScrollPosition();
+      if (RectI::withSize(min, areaSize).contains(pos) && (maxScroll[0] > 0 || maxScroll[1] > 0))
+        return area;
+    }
+    return {};
+  }
+
   float distanceToRect(RectI const& rect, Vec2F const& p) {
     float dx = std::max({(float)rect.xMin() - p[0], 0.0f, p[0] - (float)rect.xMax()});
     float dy = std::max({(float)rect.yMin() - p[1], 0.0f, p[1] - (float)rect.yMax()});
@@ -233,10 +253,13 @@ float PaneManager::effectiveScale(PanePtr const& pane) const {
     if (size[0] <= 0 || size[1] <= 0)
       return global;
     Vec2F window = Vec2F(m_context->windowSize());
-    // the small tolerance keeps window-sized panes (sized from the current
-    // scale, rounded up) from shrinking themselves
-    float fit = std::floor(std::min(window[0] / size[0], window[1] / size[1]) + 0.02f);
-    return std::min(global, std::max(1.0f, fit));
+    // Fractional so an oversized pane fills the screen instead of dropping a
+    // whole step. The tolerance keeps window-sized panes (sized from the
+    // current scale, rounded up) from shrinking themselves.
+    float fit = std::min(window[0] / size[0], window[1] / size[1]);
+    if (fit >= global * 0.98f)
+      return global;
+    return std::max(1.0f, std::floor(fit * 8.0f) / 8.0f);
   }
 #else
   (void)pane;
@@ -244,7 +267,31 @@ float PaneManager::effectiveScale(PanePtr const& pane) const {
   return global;
 }
 
-Maybe<Vec2F> PaneManager::findSnapTarget(Vec2F pixelPos, float maxPixelDistance) const {
+bool PaneManager::touchLayer(PaneLayer layer) const {
+  return layer == PaneLayer::ModalWindow || layer == PaneLayer::Window || (layer == PaneLayer::Hud && m_touchAssistHud);
+}
+
+PanePtr PaneManager::paneAtPixels(Vec2F pixelPos, bool touchLayersOnly) const {
+  for (auto const& layerPair : m_displayedPanes) {
+    if (touchLayersOnly && !touchLayer(layerPair.first))
+      continue;
+    for (auto const& panePair : layerPair.second) {
+      auto const& pane = panePair.first;
+      if (pane == m_activeTooltip || !pane->active())
+        continue;
+      float scale = effectiveScale(pane);
+      ScaleScope scope(m_context, scale);
+      if (pane->inWindow(Vec2I::floor(pixelPos / scale)))
+        return pane;
+      // a modal window blocks everything beneath it
+      if (touchLayersOnly && layerPair.first == PaneLayer::ModalWindow)
+        return {};
+    }
+  }
+  return {};
+}
+
+Maybe<Vec2F> PaneManager::findSnapTarget(Vec2F pixelPos, float maxPixelDistance, bool* onButton) const {
   Maybe<Vec2F> best;
   float bestDist = maxPixelDistance;
   bool foundModal = false;
@@ -267,8 +314,11 @@ Maybe<Vec2F> PaneManager::findSnapTarget(Vec2F pixelPos, float maxPixelDistance)
       collectButtons(pane, buttons);
       for (auto const& button : buttons) {
         RectI rect = button->screenBoundRect();
-        if (rect.contains(ipos))
+        if (rect.contains(ipos)) {
+          if (onButton)
+            *onButton = true;
           return {};  // already on a button; leave the tap alone
+        }
         float dist = distanceToRect(rect, interfacePos) * scale;
         if (dist <= bestDist) {
           bestDist = dist;
@@ -288,46 +338,119 @@ Maybe<Vec2F> PaneManager::findSnapTarget(Vec2F pixelPos, float maxPixelDistance)
   return best;
 }
 
-InputEvent PaneManager::snapTouchEvent(InputEvent const& event) {
-#ifdef STAR_SYSTEM_ANDROID
+bool PaneManager::handleTouchEvent(InputEvent const& event) {
+  Vec2F pixels = Vec2F(m_context->windowSize());
+  float minDim = std::min(pixels[0], pixels[1]);
+  float snapDistance = 0.055f * minDim;
+  float dragSlop = std::max(12.0f, 0.025f * minDim);
+
   if (auto down = event.ptr<MouseButtonDownEvent>()) {
-    m_touchDown = true;
-    m_touchSnapOffset = Vec2F();
-    Vec2F pixels = Vec2F(m_context->windowSize());
-    float maxDistance = 0.055f * std::min(pixels[0], pixels[1]);
-    if (auto target = findSnapTarget(down->mousePosition, maxDistance)) {
-      m_touchSnapOffset = *target - down->mousePosition;
-      auto result = *down;
-      result.mousePosition += m_touchSnapOffset;
-      return result;
+    if (down->mouseButton != MouseButton::Left || m_touchPhase != TouchPhase::None)
+      return handleInputEvent(event);
+    Vec2F pos = Vec2F(down->mousePosition);
+    if (!paneAtPixels(pos, true) && !findSnapTarget(pos, snapDistance)) {
+      m_touchPhase = TouchPhase::Passthrough;
+      return handleInputEvent(event);
     }
-    return event;
+    m_touchPhase = TouchPhase::Pending;
+    m_touchStart = m_touchLast = pos;
+    m_touchStartTime = Time::monotonicTime();
+    return true;
   }
-  if (m_touchDown) {
-    if (auto move = event.ptr<MouseMoveEvent>()) {
-      auto result = *move;
-      result.mousePosition += m_touchSnapOffset;
-      return result;
+
+  if (auto move = event.ptr<MouseMoveEvent>()) {
+    Vec2F pos = Vec2F(move->mousePosition);
+    if (m_touchPhase == TouchPhase::Pending) {
+      m_touchLast = pos;
+      if (vmag(pos - m_touchStart) < dragSlop)
+        return true;
+      m_touchScrollArea.reset();
+      if (auto pane = paneAtPixels(m_touchStart, true)) {
+        float scale = effectiveScale(pane);
+        ScaleScope scope(m_context, scale);
+        if (auto area = findScrollArea(pane, Vec2I::floor(m_touchStart / scale))) {
+          m_touchScrollArea = area;
+          m_touchScrollScale = scale;
+          m_touchScrollRemainder = Vec2F();
+        }
+      }
+      if (m_touchScrollArea) {
+        m_touchPhase = TouchPhase::Scrolling;
+        m_touchLast = m_touchStart;
+      } else {
+        m_touchPhase = TouchPhase::Dragging;
+        handleInputEvent(MouseButtonDownEvent{MouseButton::Left, m_touchStart});
+        handleInputEvent(MouseMoveEvent{pos - m_touchStart, pos});
+        return true;
+      }
     }
-    if (auto up = event.ptr<MouseButtonUpEvent>()) {
-      auto result = *up;
-      result.mousePosition += m_touchSnapOffset;
-      m_touchDown = false;
-      m_touchSnapOffset = Vec2F();
-      return result;
+    if (m_touchPhase == TouchPhase::Scrolling) {
+      // content follows the finger
+      Vec2F delta = (pos - m_touchLast) / m_touchScrollScale + m_touchScrollRemainder;
+      Vec2I whole = Vec2I(delta);
+      m_touchScrollRemainder = delta - Vec2F(whole);
+      m_touchLast = pos;
+      if (auto area = as<ScrollArea>(m_touchScrollArea))
+        area->scrollAreaBy(-whole);
+      return true;
     }
+    if (m_touchPhase == TouchPhase::Consumed)
+      return true;
+    return handleInputEvent(event);
   }
-#endif
-  return event;
+
+  if (auto up = event.ptr<MouseButtonUpEvent>()) {
+    if (up->mouseButton != MouseButton::Left)
+      return handleInputEvent(event);
+    auto phase = m_touchPhase;
+    m_touchPhase = TouchPhase::None;
+    m_touchScrollArea.reset();
+    if (phase == TouchPhase::Pending) {
+      // a tap: land it on the nearest button if it only just missed one
+      Vec2F pos = m_touchStart;
+      if (auto target = findSnapTarget(pos, snapDistance))
+        pos = *target;
+      Vec2F ipos = pos;
+      handleInputEvent(MouseMoveEvent{Vec2F(), ipos});
+      handleInputEvent(MouseButtonDownEvent{MouseButton::Left, ipos});
+      handleInputEvent(MouseButtonUpEvent{MouseButton::Left, ipos});
+      return true;
+    }
+    if (phase == TouchPhase::Scrolling || phase == TouchPhase::Consumed)
+      return true;
+    return handleInputEvent(event);
+  }
+
+  return handleInputEvent(event);
+}
+
+void PaneManager::updateTouch() {
+  // long press away from buttons acts as a right click
+  if (m_touchPhase != TouchPhase::Pending || Time::monotonicTime() - m_touchStartTime < 0.5)
+    return;
+  Vec2F pixels = Vec2F(m_context->windowSize());
+  bool onButton = false;
+  if (findSnapTarget(m_touchStart, 0.055f * std::min(pixels[0], pixels[1]), &onButton) || onButton)
+    return;
+  m_touchPhase = TouchPhase::Consumed;
+  Vec2F ipos = m_touchStart;
+  handleInputEvent(MouseMoveEvent{Vec2F(), ipos});
+  handleInputEvent(MouseButtonDownEvent{MouseButton::Right, ipos});
+  handleInputEvent(MouseButtonUpEvent{MouseButton::Right, ipos});
 }
 
 bool PaneManager::sendInputEvent(InputEvent const& event) {
-  return handleInputEvent(snapTouchEvent(event));
+#ifdef STAR_SYSTEM_ANDROID
+  return handleTouchEvent(event);
+#else
+  return handleInputEvent(event);
+#endif
 }
 
 bool PaneManager::handleInputEvent(InputEvent const& event) {
   if (event.is<MouseMoveEvent>()) {
     m_tooltipLastMousePos = *m_context->mousePosition(event);
+    m_tooltipLastMousePixels = Vec2F(event.get<MouseMoveEvent>().mousePosition);
 
     for (auto const& layerPair : m_displayedPanes) {
       for (auto const& panePair : layerPair.second) {
@@ -439,12 +562,16 @@ void PaneManager::render() {
 }
 
 void PaneManager::update(float dt) {
-  auto newTooltipParentPane = getPaneAt(m_tooltipLastMousePos);
+#ifdef STAR_SYSTEM_ANDROID
+  updateTouch();
+#endif
+
+  // resolved in pixels because panes may be drawn at their own scale
+  auto newTooltipParentPane = paneAtPixels(m_tooltipLastMousePixels, false);
 
   bool updateTooltip = m_tooltipShowTimer.tick(dt) || (m_activeTooltip && (
     vmag(m_tooltipInitialPosition - m_tooltipLastMousePos) > m_tooltipMouseoverRadius
-    || m_tooltipParentPane != newTooltipParentPane
-    || !m_tooltipParentPane->inWindow(m_tooltipLastMousePos))); 
+    || m_tooltipParentPane != newTooltipParentPane));
 
   if (updateTooltip) {
     if (m_activeTooltip) {
@@ -455,7 +582,13 @@ void PaneManager::update(float dt) {
 
     m_tooltipShowTimer.reset();
     if (newTooltipParentPane) {
-      if (auto tooltip = newTooltipParentPane->createTooltip(m_tooltipLastMousePos)) {
+      float parentScale = effectiveScale(newTooltipParentPane);
+      PanePtr tooltip;
+      {
+        ScaleScope scope(m_context, parentScale);
+        tooltip = newTooltipParentPane->createTooltip(Vec2I::floor(m_tooltipLastMousePixels / parentScale));
+      }
+      if (tooltip) {
         m_activeTooltip = std::move(tooltip);
         m_tooltipParentPane = std::move(newTooltipParentPane);
         m_tooltipInitialPosition = m_tooltipLastMousePos;
