@@ -487,7 +487,9 @@ find_package(PkgConfig)
 
 # Use vcpkg-sourced imgui unless otherwise requested
 option(STAR_USE_VENDORED_IMGUI "Use a vendored copy of imgui in source/extern/imgui/" OFF)
-if(NOT STAR_USE_VENDORED_IMGUI)
+if(STAR_SYSTEM_ANDROID)
+  include(AndroidImgui)
+elseif(NOT STAR_USE_VENDORED_IMGUI)
   find_package(imgui CONFIG REQUIRED)
   set(STAR_EXT_LIBS ${STAR_EXT_LIBS} imgui::imgui)
 else()
