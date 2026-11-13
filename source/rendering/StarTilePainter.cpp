@@ -141,7 +141,10 @@ TilePainter::ChunkHash TilePainter::liquidChunkHash(WorldRenderData& renderData,
 
   forEachRenderTile(renderData, tileRange, [&](Vec2I const&, RenderTile const& renderTile) {
     //renderTile.hashPushLiquid(hasher);
-    buffer.append((char*)&renderTile.liquidId, sizeof(LiquidId) + sizeof(LiquidLevel));
+    // liquidId and liquidLevel are the last two fields; LiquidLevel is a larger
+    // struct, so using its size read past the end of the tile array.
+    buffer.append((char*)&renderTile.liquidId, sizeof(renderTile.liquidId));
+    buffer.append((char*)&renderTile.liquidLevel, sizeof(renderTile.liquidLevel));
   });
 
   //return hasher.digest();
