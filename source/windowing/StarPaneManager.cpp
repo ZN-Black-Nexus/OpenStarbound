@@ -306,12 +306,8 @@ float PaneManager::effectiveScale(PanePtr const& pane) const {
       continue;
     if (layerPair.first == PaneLayer::World || layerPair.first == PaneLayer::Tooltip)
       return global;
-    if (layerPair.first == PaneLayer::Hud && !m_touchAssistHud) {
-      // The in-game HUD (hotbar, status, chat) is laid out for tall desktop
-      // windows; on a short phone screen keep it from swallowing the view.
-      float hudScale = std::floor(m_context->renderer()->screenSize()[1] / 260.0f * 8.0f) / 8.0f;
-      return std::max(1.0f, std::min(global, hudScale));
-    }
+    if (layerPair.first == PaneLayer::Hud && !m_touchAssistHud)
+      return global;
     Vec2F size = Vec2F(visibleRect(pane).size());
     if (size[0] <= 0 || size[1] <= 0)
       return global;

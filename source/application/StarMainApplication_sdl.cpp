@@ -1135,6 +1135,9 @@ private:
     List<InputEvent> inputEvents;
 
     ImGuiIO& io = ImGui::GetIO();
+#ifdef STAR_SYSTEM_ANDROID
+    m_touchControls.update(inputEvents);
+#endif
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
       SDL_ConvertEventToRenderCoordinates(SDL_GetRenderer(m_sdlWindow), &event);

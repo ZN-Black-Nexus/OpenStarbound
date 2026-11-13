@@ -43,11 +43,11 @@ public:
       {"USE", {4.2f, 1.2f}, true, true,   0.70f, Key::E, false},
       {"TECH", {3.9f, 3.0f}, true, true,  0.65f, Key::F, false},
       {"INV", {1.0f, 4.1f}, true, true,   0.60f, Key::I, false},
-      {"MENU", {0.6f, 0.6f}, true, false, 0.45f, Key::Escape, false},
+      {"MENU", {5.3f, 2.15f}, true, false, 0.45f, Key::Escape, false},
       {"CRAFT", {2.1f, 0.8f}, true, false, 0.55f, Key::C, false},
-      {"ALT", {1.6f, 0.6f}, true, false,  0.45f, {}, true},
-      {"SHIFT", {2.6f, 0.6f}, true, false, 0.45f, Key::LShift, true},
-      {"CTRL", {3.6f, 0.6f}, true, false, 0.45f, {}, false},
+      {"ALT", {4.3f, 2.15f}, true, false,  0.45f, {}, true},
+      {"SHIFT", {3.3f, 2.15f}, true, false, 0.45f, Key::LShift, true},
+      {"CTRL", {2.3f, 2.15f}, true, false, 0.45f, {}, false},
     };
     m_buttonDown.resize(m_buttons.size(), false);
     m_toggled.resize(m_buttons.size(), false);
@@ -86,16 +86,19 @@ public:
         pressButton(button, out);
       } else if (m_visible && m_aimStick && !m_aimFinger && (pos - aimCenter()).magnitude() <= aimRadius() * 1.2f) {
         m_aimFinger = id;
+        m_aimResetPending = false;
         aimUpdate(pos, out);
         if (m_aimFires) {
           m_aimButton = pointerButton();
           out.append(MouseButtonDownEvent{m_aimButton, m_lastPointer});
           m_aimPressed = true;
         }
-      } else if (m_visible && m_joystick && !m_joyFinger && pos[0] < m_size[0] * 0.4f && pos[1] > m_size[1] * 0.3f) {
+      } else if (m_visible && m_joystick && !m_joyFinger && (pos - joyHome()).magnitude() <= joyRadius() * 1.6f) {
         m_joyFinger = id;
-        m_joyAnchor = m_joyPos = pos;
+        m_joyAnchor = joyHome();
+        joyUpdate(pos, out);
       } else if (!m_pointerFinger) {
+        m_aimResetPending = false;
         m_pointerFinger = id;
         pointerMove(pos, out);
         out.append(MouseButtonDownEvent{pointerButton(), flip(pos)});
@@ -156,7 +159,7 @@ public:
 
     if (m_joystick) {
       float r = joyRadius();
-      Vec2F base = m_joyFinger ? m_joyAnchor : Vec2F(2.3f * unit(), m_size[1] - 2.3f * unit());
+      Vec2F base = joyHome();
       Vec2F knob = m_joyFinger ? m_joyPos : base;
       ImU32 ring = m_joyFinger ? IM_COL32(255, 255, 255, 140) : IM_COL32(255, 255, 255, 60);
       list->AddCircleFilled(ImVec2(base[0], base[1]), r, IM_COL32(0, 0, 0, m_joyFinger ? 70 : 30), 40);
@@ -205,6 +208,7 @@ public:
         m_joystick ? "Movement:  JOYSTICK  (tap for buttons)" : "Movement:  BUTTONS  (tap for joystick)",
         m_aimStick ? "Aim stick:  ON" : "Aim stick:  OFF  (tap the screen to aim)",
         m_aimFires ? "Aim stick uses held item:  ON" : "Aim stick uses held item:  OFF  (aim only)",
+        m_aimReset ? "Cursor after aiming:  RETURNS to centre after 1 s" : "Cursor after aiming:  STAYS where you left it",
         "Close"};
       for (int i = 0; i < SettingsRows; ++i) {
         ImVec2 a(origin[0], origin[1] + i * SettingsRowHeight * u);
@@ -213,6 +217,15 @@ public:
         ImVec2 ts = uiFont->CalcTextSizeA(fs, FLT_MAX, 0.0f, labels[i]);
         list->AddText(uiFont, fs, ImVec2(a.x + 0.3f * u, (a.y + bmax.y) / 2 - ts.y / 2), IM_COL32(255, 255, 255, 255), labels[i]);
       }
+    }
+  }
+
+  // Called once per frame: a second after the aim stick is let go, the
+  // cursor goes back to the player if that option is on.
+  void update(List<InputEvent>& out) {
+    if (m_aimResetPending && SDL_GetTicks() - m_aimReleaseTicks >= 1000) {
+      m_aimResetPending = false;
+      pointerMove(Vec2F(m_size[0] * 0.5f, m_size[1] * 0.5f), out);
     }
   }
 
@@ -254,6 +267,7 @@ private:
   bool hidden(size_t index) const { return (m_joystick && index <= 3) || index == 7 || index == 9; }
 
   float joyRadius() const { return 1.15f * unit(); }
+  Vec2F joyHome() const { return Vec2F(2.3f * unit(), m_size[1] - 2.3f * unit()); }
   float aimRadius() const { return 1.35f * unit(); }
   Vec2F aimCenter() const { return Vec2F(m_size[0] - 2.1f * unit(), m_size[1] - 2.0f * unit()); }
 
@@ -261,12 +275,10 @@ private:
     float r = joyRadius();
     Vec2F d = pos - m_joyAnchor;
     float len = d.magnitude();
-    // the base trails the finger so a long drag never leaves it stranded
-    if (len > r) {
-      m_joyAnchor = pos - d * (r / len);
-      d = pos - m_joyAnchor;
-    }
-    m_joyPos = pos;
+    // the stick stays put; only the knob is held to its rim
+    if (len > r)
+      d = d * (r / len);
+    m_joyPos = m_joyAnchor + d;
     bool want[4] = {d[0] < -0.3f * r, d[0] > 0.3f * r, d[1] < -0.55f * r, d[1] > 0.55f * r};
     setJoyKeys(want, out);
   }
@@ -307,10 +319,14 @@ private:
       out.append(MouseButtonUpEvent{m_aimButton, m_lastPointer});
     m_aimPressed = false;
     m_aimVec = Vec2F();
+    if (m_aimFinger && m_aimReset) {
+      m_aimResetPending = true;
+      m_aimReleaseTicks = SDL_GetTicks();
+    }
     m_aimFinger.reset();
   }
 
-  static constexpr int SettingsRows = 4;
+  static constexpr int SettingsRows = 5;
   static constexpr float SettingsWidth = 10.0f;
   static constexpr float SettingsRowHeight = 1.35f;
 
@@ -332,6 +348,8 @@ private:
     else if (row == 2)
       m_aimFires = !m_aimFires;
     else if (row == 3)
+      m_aimReset = !m_aimReset;
+    else if (row == 4)
       m_settingsOpen = false;
     else
       return;
@@ -350,6 +368,7 @@ private:
         if (!strcmp(key, "joystick")) m_joystick = value != 0;
         else if (!strcmp(key, "aimstick")) m_aimStick = value != 0;
         else if (!strcmp(key, "aimfires")) m_aimFires = value != 0;
+        else if (!strcmp(key, "aimreset")) m_aimReset = value != 0;
       }
       fclose(f);
     }
@@ -357,7 +376,7 @@ private:
 
   void saveSettings() const {
     if (FILE* f = fopen("touchcontrols.cfg", "w")) {
-      fprintf(f, "joystick=%d\naimstick=%d\naimfires=%d\n", (int)m_joystick, (int)m_aimStick, (int)m_aimFires);
+      fprintf(f, "joystick=%d\naimstick=%d\naimfires=%d\naimreset=%d\n", (int)m_joystick, (int)m_aimStick, (int)m_aimFires, (int)m_aimReset);
       fclose(f);
     }
   }
@@ -430,6 +449,9 @@ private:
   bool m_joystick = true;
   bool m_aimStick = true;
   bool m_aimFires = true;
+  bool m_aimReset = false;
+  bool m_aimResetPending = false;
+  Uint64 m_aimReleaseTicks = 0;
 
   Maybe<SDL_FingerID> m_joyFinger;
   Vec2F m_joyAnchor;
