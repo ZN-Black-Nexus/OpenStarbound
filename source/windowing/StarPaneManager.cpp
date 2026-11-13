@@ -6,6 +6,8 @@
 #include "StarButtonWidget.hpp"
 #include "StarScrollArea.hpp"
 #include "StarTime.hpp"
+#include "StarImage.hpp"
+#include "StarLogging.hpp"
 
 namespace Star {
 
@@ -246,6 +248,44 @@ namespace {
   }
 }
 
+RectI PaneManager::visibleRect(PanePtr const& pane) const {
+  RectI full = RectI::withSize(Vec2I(), pane->size());
+  auto cached = m_visibleRects.ptr(pane.get());
+  if (cached && cached->first == pane->size())
+    return cached->second;
+
+  RectI result = RectI::null();
+  try {
+    auto assets = Root::singleton().assets();
+    auto bg = pane->getBG();
+    int y = 0;
+    for (auto const& path : {bg.footer, bg.body, bg.header}) {
+      if (path.empty())
+        continue;
+      auto image = assets->image(path);
+      int w = image->width(), h = image->height();
+      int x0 = w, y0 = h, x1 = 0, y1 = 0;
+      for (int py = 0; py < h; ++py) {
+        for (int px = 0; px < w; ++px) {
+          if (image->get(px, py)[3] > 16) {
+            x0 = std::min(x0, px); x1 = std::max(x1, px + 1);
+            y0 = std::min(y0, py); y1 = std::max(y1, py + 1);
+          }
+        }
+      }
+      if (x1 > x0 && y1 > y0)
+        result.combine(RectI(x0, y + y0, x1, y + y1));
+      y += h;
+    }
+  } catch (std::exception const&) {
+    result = RectI::null();
+  }
+  if (result.isNull() || result.width() <= 0 || result.height() <= 0)
+    result = full;
+  m_visibleRects[pane.get()] = {pane->size(), result};
+  return result;
+}
+
 float PaneManager::effectiveScale(PanePtr const& pane) const {
   float global = m_context->interfaceScale();
 #ifdef STAR_SYSTEM_ANDROID
@@ -256,7 +296,7 @@ float PaneManager::effectiveScale(PanePtr const& pane) const {
       return global;
     if (layerPair.first == PaneLayer::Hud && !m_touchAssistHud)
       return global;
-    Vec2F size = Vec2F(pane->size());
+    Vec2F size = Vec2F(visibleRect(pane).size());
     if (size[0] <= 0 || size[1] <= 0)
       return global;
     Vec2F window = Vec2F(m_context->renderer()->screenSize());
@@ -270,7 +310,7 @@ float PaneManager::effectiveScale(PanePtr const& pane) const {
       // In-game windows keep to half the width so two fit side by side.
       if (layerPair.first == PaneLayer::Window)
         fit = std::min(fit, 0.5f * window[0] / size[0]);
-      float enlarged = std::floor(std::min(global * 3.0f, fit * 0.99f) * 8.0f) / 8.0f;
+      float enlarged = std::floor(std::min(global * 2.0f, fit * 0.99f) * 8.0f) / 8.0f;
       return std::max(global, enlarged);
     }
     return std::max(1.0f, std::floor(fit * 8.0f) / 8.0f);
@@ -586,7 +626,16 @@ void PaneManager::render() {
           pane->setPosition(pane->position().piecewiseClamp(Vec2I(), Vec2I().piecewiseMax(windowSize() - pane->size())));
 
         newScales[pane.get()] = t;
-        pane->setDrawingOffset(calculatePaneOffset(pane));
+        Vec2I drawingOffset = calculatePaneOffset(pane);
+        RectI visible = visibleRect(pane);
+        // center what is drawn rather than the padded pane
+        if (adapted && pane->anchor() == PaneAnchor::Center)
+          drawingOffset += pane->size() / 2 - visible.center();
+        if (t != last)
+          Logger::info("PaneManager: pane {}x{} visible {}x{} at {},{} drawn at scale {} (ui scale {}, screen {}x{})",
+              pane->size()[0], pane->size()[1], visible.width(), visible.height(), visible.xMin(), visible.yMin(),
+              scale, globalScale, renderer->screenSize()[0], renderer->screenSize()[1]);
+        pane->setDrawingOffset(drawingOffset);
         if (stretch != 1.0f)
           renderer->setScreenStretch(stretch);
         pane->render(RectI(Vec2I(), windowSize()));

@@ -97,6 +97,9 @@ private:
   // Interface scale this pane is drawn and hit-tested at. Panes too big to fit
   // the window at the global scale get their own smaller scale (Android only).
   float effectiveScale(PanePtr const& pane) const;
+  // The part of a pane that is actually drawn: its background art without
+  // transparent padding. Pane sizes include that padding.
+  RectI visibleRect(PanePtr const& pane) const;
   // {scale, horizontal stretch} a pane is drawn and hit-tested with
   pair<float, float> paneTransform(PanePtr const& pane) const;
 
@@ -109,6 +112,7 @@ private:
   float m_prevInterfaceScale;
 
   HashMap<Pane const*, pair<float, float>> m_paneScales;
+  mutable HashMap<Pane const*, pair<Vec2I, RectI>> m_visibleRects;
 
   // Touch gestures over panes: a press is held back until it resolves into a
   // tap (snapped to the nearest button), a drag, a scroll of the scroll area
