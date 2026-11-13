@@ -727,8 +727,8 @@ void PaneManager::render() {
         if (adapted && pane->anchor() == PaneAnchor::Center)
           drawingOffset += pane->size() / 2 - visible.center();
         if (t != last)
-          Logger::info("PaneManager: pane {}x{} visible {}x{} at {},{} drawn at scale {} (ui scale {}, screen {}x{})",
-              pane->size()[0], pane->size()[1], visible.width(), visible.height(), visible.xMin(), visible.yMin(),
+          Logger::info("PaneManager: pane {} {}x{} visible {}x{} at {},{} drawn at scale {} (ui scale {}, screen {}x{})",
+              typeid(*pane).name(), pane->size()[0], pane->size()[1], visible.width(), visible.height(), visible.xMin(), visible.yMin(),
               scale, globalScale, renderer->screenSize()[0], renderer->screenSize()[1]);
         pane->setDrawingOffset(drawingOffset);
 #ifdef STAR_SYSTEM_ANDROID

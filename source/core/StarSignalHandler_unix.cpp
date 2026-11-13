@@ -1,6 +1,9 @@
 #include "StarSignalHandler.hpp"
 
 #include <signal.h>
+#include <exception>
+#include <stdlib.h>
+#include "StarException.hpp"
 
 namespace Star {
 
@@ -19,6 +22,37 @@ struct SignalHandlerImpl {
   void setHandleFatal(bool b) {
     handlingFatal = b;
     if (handlingFatal) {
+#ifdef STAR_SYSTEM_ANDROID
+      // Android gives no console, so make every way of dying leave a reason
+      // in the log: aborts, uncaught exceptions and stack overflows too.
+      stack_t altStack;
+      altStack.ss_size = 64 * 1024;
+      altStack.ss_sp = malloc(altStack.ss_size);
+      altStack.ss_flags = 0;
+      sigaltstack(&altStack, nullptr);
+      struct sigaction action;
+      sigemptyset(&action.sa_mask);
+      action.sa_handler = handleFatal;
+      action.sa_flags = SA_ONSTACK;
+      sigaction(SIGSEGV, &action, nullptr);
+      sigaction(SIGABRT, &action, nullptr);
+      sigaction(SIGILL, &action, nullptr);
+      sigaction(SIGFPE, &action, nullptr);
+      sigaction(SIGBUS, &action, nullptr);
+      std::set_terminate([]() {
+        if (auto current = std::current_exception()) {
+          try {
+            std::rethrow_exception(current);
+          } catch (std::exception const& e) {
+            fatalException(e, true);
+          } catch (...) {
+            fatalError("Unknown exception terminated the game", true);
+          }
+        }
+        fatalError("std::terminate called", true);
+      });
+      return;
+#endif
       signal(SIGSEGV, handleFatal);
       signal(SIGILL, handleFatal);
       signal(SIGFPE, handleFatal);
@@ -40,6 +74,16 @@ struct SignalHandlerImpl {
   }
 
   static void handleFatal(int signum) {
+    static volatile sig_atomic_t handling = 0;
+    if (handling) {
+      // fatalError aborts; let that second signal kill the process
+      signal(signum, SIG_DFL);
+      raise(signum);
+      return;
+    }
+    handling = 1;
+    if (signum == SIGABRT)
+      fatalError("Abort Encountered!", true);
     if (signum == SIGSEGV)
       fatalError("Segfault Encountered!", true);
     else if (signum == SIGILL)
