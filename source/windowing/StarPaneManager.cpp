@@ -5,6 +5,7 @@
 #include "StarRoot.hpp"
 #include "StarButtonWidget.hpp"
 #include "StarScrollArea.hpp"
+#include "StarSliderBar.hpp"
 #include "StarTime.hpp"
 #include "StarImage.hpp"
 #include "StarLogging.hpp"
@@ -241,6 +242,17 @@ namespace {
     return {};
   }
 
+  void collectEnlargeable(WidgetPtr const& widget, List<WidgetPtr>& out) {
+    if (!widget || !widget->visibility())
+      return;
+    if (widget->touchEnlargeable()) {
+      out.append(widget);
+      return;
+    }
+    for (size_t i = 0; i < widget->numChildren(); ++i)
+      collectEnlargeable(widget->getChildNum(i), out);
+  }
+
   float distanceToRect(RectI const& rect, Vec2F const& p) {
     float dx = std::max({(float)rect.xMin() - p[0], 0.0f, p[0] - (float)rect.xMax()});
     float dy = std::max({(float)rect.yMin() - p[1], 0.0f, p[1] - (float)rect.yMax()});
@@ -307,11 +319,7 @@ float PaneManager::effectiveScale(PanePtr const& pane) const {
     if (fit >= global * 0.98f) {
       // Room to spare: enlarge menus and windows past the chosen scale so
       // their buttons are finger sized, without zooming the HUD or the world.
-      // In-game windows keep to half the width so two fit side by side.
-      if (layerPair.first == PaneLayer::Window)
-        fit = std::min(fit, 0.5f * window[0] / size[0]);
-      float enlarged = std::floor(std::min(global * 2.0f, fit * 0.99f) * 8.0f) / 8.0f;
-      return std::max(global, enlarged);
+      return global;
     }
     return std::max(1.0f, std::floor(fit * 8.0f) / 8.0f);
   }
@@ -325,6 +333,79 @@ pair<float, float> PaneManager::paneTransform(PanePtr const& pane) const {
   float scale = effectiveScale(pane);
   float stretch = 1.0f;
   return {scale, stretch};
+}
+
+void PaneManager::assignTouchZoom(PanePtr const& pane) const {
+  List<WidgetPtr> widgets;
+  for (size_t i = 0; i < pane->numChildren(); ++i)
+    collectEnlargeable(pane->getChildNum(i), widgets);
+
+  float scale = m_context->interfaceScale();
+  Vec2F screen = Vec2F(m_context->renderer()->screenSize());
+  // controls should be at least this many pixels across
+  float target = 0.085f * std::min(screen[0], screen[1]);
+
+  List<RectF> rects;
+  for (auto const& widget : widgets)
+    rects.append(RectF(widget->screenBoundRect()));
+
+  for (size_t i = 0; i < widgets.size(); ++i) {
+    auto const& rect = rects[i];
+    float smallest = std::min(rect.width(), rect.height()) * scale;
+    float zoom = 1.0f;
+    if (smallest > 0) {
+      zoom = clamp(target / smallest, 1.0f, 2.5f);
+      // never grow into a neighboring control
+      for (size_t j = 0; j < widgets.size() && zoom > 1.0f; ++j) {
+        if (i == j)
+          continue;
+        auto const& other = rects[j];
+        Vec2F delta = rect.center() - other.center();
+        float limitX = std::abs(delta[0]) / std::max(1.0f, (rect.width() + other.width()) / 2);
+        float limitY = std::abs(delta[1]) / std::max(1.0f, (rect.height() + other.height()) / 2);
+        zoom = std::min(zoom, std::max(limitX, limitY));
+      }
+    }
+    widgets[i]->setTouchZoom(std::max(1.0f, zoom));
+  }
+}
+
+WidgetPtr PaneManager::findZoomedWidget(Vec2F pixelPos, Vec2F& centerPixels) const {
+  for (auto const& layerPair : m_displayedPanes) {
+    if (!touchLayer(layerPair.first))
+      continue;
+    for (auto const& panePair : layerPair.second) {
+      auto const& pane = panePair.first;
+      if (!pane->active())
+        continue;
+      auto t = paneTransform(pane);
+      ScaleScope scope(m_context, t);
+      List<WidgetPtr> widgets;
+      for (size_t i = 0; i < pane->numChildren(); ++i)
+        collectEnlargeable(pane->getChildNum(i), widgets);
+      for (auto const& widget : widgets) {
+        float zoom = widget->touchZoom();
+        if (zoom <= 1.0f)
+          continue;
+        RectF rect = RectF(widget->screenBoundRect()).scaled(t.first);
+        Vec2F center = rect.center();
+        RectF enlarged = RectF(center + (rect.min() - center) * zoom, center + (rect.max() - center) * zoom);
+        if (enlarged.contains(pixelPos)) {
+          centerPixels = center;
+          return widget;
+        }
+      }
+      if (layerPair.first == PaneLayer::ModalWindow)
+        return {};
+    }
+  }
+  return {};
+}
+
+Vec2F PaneManager::mapTouch(Vec2F pixelPos) const {
+  if (m_touchZoomK <= 1.0f)
+    return pixelPos;
+  return m_touchZoomCenter + (pixelPos - m_touchZoomCenter) / m_touchZoomK;
 }
 
 bool PaneManager::touchLayer(PaneLayer layer) const {
@@ -409,7 +490,15 @@ bool PaneManager::handleTouchEvent(InputEvent const& event) {
     if (down->mouseButton != MouseButton::Left || m_touchPhase != TouchPhase::None)
       return handleInputEvent(event);
     Vec2F pos = Vec2F(down->mousePosition);
-    if (!paneAtPixels(pos, true) && !findSnapTarget(pos, snapDistance)) {
+    m_touchZoomK = 1.0f;
+    m_touchZoomSlider = false;
+    Vec2F zoomCenter;
+    if (auto widget = findZoomedWidget(pos, zoomCenter)) {
+      m_touchZoomCenter = zoomCenter;
+      m_touchZoomK = widget->touchZoom();
+      m_touchZoomSlider = is<SliderBarWidget>(widget);
+    }
+    if (m_touchZoomK <= 1.0f && !paneAtPixels(pos, true) && !findSnapTarget(pos, snapDistance)) {
       m_touchPhase = TouchPhase::Passthrough;
       return handleInputEvent(event);
     }
@@ -426,7 +515,7 @@ bool PaneManager::handleTouchEvent(InputEvent const& event) {
       if (vmag(pos - m_touchStart) < dragSlop)
         return true;
       m_touchScrollArea.reset();
-      if (auto pane = paneAtPixels(m_touchStart, true)) {
+      if (auto pane = m_touchZoomSlider ? PanePtr() : paneAtPixels(m_touchStart, true)) {
         auto t = paneTransform(pane);
         ScaleScope scope(m_context, t);
         Vec2F ppu = Vec2F(t.first * t.second, t.first);
@@ -441,8 +530,8 @@ bool PaneManager::handleTouchEvent(InputEvent const& event) {
         m_touchLast = m_touchStart;
       } else {
         m_touchPhase = TouchPhase::Dragging;
-        handleInputEvent(MouseButtonDownEvent{MouseButton::Left, m_touchStart});
-        handleInputEvent(MouseMoveEvent{pos - m_touchStart, pos});
+        handleInputEvent(MouseButtonDownEvent{MouseButton::Left, mapTouch(m_touchStart)});
+        handleInputEvent(MouseMoveEvent{(pos - m_touchStart) / m_touchZoomK, mapTouch(pos)});
         return true;
       }
     }
@@ -458,6 +547,8 @@ bool PaneManager::handleTouchEvent(InputEvent const& event) {
     }
     if (m_touchPhase == TouchPhase::Consumed)
       return true;
+    if (m_touchPhase == TouchPhase::Dragging)
+      return handleInputEvent(MouseMoveEvent{move->mouseMove / m_touchZoomK, mapTouch(pos)});
     return handleInputEvent(event);
   }
 
@@ -469,9 +560,11 @@ bool PaneManager::handleTouchEvent(InputEvent const& event) {
     m_touchScrollArea.reset();
     if (phase == TouchPhase::Pending) {
       // a tap: land it on the nearest button if it only just missed one
-      Vec2F pos = m_touchStart;
-      if (auto target = findSnapTarget(pos, snapDistance))
-        pos = *target;
+      Vec2F pos = mapTouch(m_touchStart);
+      if (m_touchZoomK <= 1.0f) {
+        if (auto target = findSnapTarget(pos, snapDistance))
+          pos = *target;
+      }
       Vec2F ipos = pos;
       handleInputEvent(MouseMoveEvent{Vec2F(), ipos});
       handleInputEvent(MouseButtonDownEvent{MouseButton::Left, ipos});
@@ -480,6 +573,8 @@ bool PaneManager::handleTouchEvent(InputEvent const& event) {
     }
     if (phase == TouchPhase::Scrolling || phase == TouchPhase::Consumed)
       return true;
+    if (phase == TouchPhase::Dragging)
+      return handleInputEvent(MouseButtonUpEvent{MouseButton::Left, mapTouch(Vec2F(up->mousePosition))});
     return handleInputEvent(event);
   }
 
@@ -488,7 +583,7 @@ bool PaneManager::handleTouchEvent(InputEvent const& event) {
 
 void PaneManager::updateTouch() {
   // long press away from buttons acts as a right click
-  if (m_touchPhase != TouchPhase::Pending || Time::monotonicTime() - m_touchStartTime < 0.5)
+  if (m_touchPhase != TouchPhase::Pending || m_touchZoomK > 1.0f || Time::monotonicTime() - m_touchStartTime < 0.5)
     return;
   Vec2F pixels = Vec2F(m_context->windowSize());
   bool onButton = false;
@@ -636,6 +731,10 @@ void PaneManager::render() {
               pane->size()[0], pane->size()[1], visible.width(), visible.height(), visible.xMin(), visible.yMin(),
               scale, globalScale, renderer->screenSize()[0], renderer->screenSize()[1]);
         pane->setDrawingOffset(drawingOffset);
+#ifdef STAR_SYSTEM_ANDROID
+        if (touchLayer(layerPair.first))
+          assignTouchZoom(pane);
+#endif
         if (stretch != 1.0f)
           renderer->setScreenStretch(stretch);
         pane->render(RectI(Vec2I(), windowSize()));

@@ -152,6 +152,8 @@ public:
   virtual void setScissorRect(Maybe<RectI> const& scissorRect) = 0;
   // Stretches everything drawn afterwards horizontally about the left edge.
   virtual void setScreenStretch(float) {}
+  // Transformation applied to all immediate primitives drawn afterwards.
+  virtual void setBaseTransform(Mat3F const&) {}
 
   virtual TexturePtr createTexture(Image const& texture,
       TextureAddressing addressing = TextureAddressing::Clamp,

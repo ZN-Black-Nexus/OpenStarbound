@@ -51,6 +51,9 @@ public:
   // Horizontal stretch of the interface; the window appears narrower by this factor.
   float interfaceStretch() const { return m_interfaceStretch; }
   void setInterfaceStretch(float stretch) { m_interfaceStretch = stretch; }
+  // Draws everything until the matching pop enlarged about a point (window pixels).
+  void pushWidgetZoom(Vec2F centerPixels, float zoom);
+  void popWidgetZoom();
 
   Maybe<Vec2I> mousePosition(InputEvent const& event, float pixelRatio) const;
   Maybe<Vec2I> mousePosition(InputEvent const& event) const;
@@ -152,6 +155,8 @@ private:
 
   float m_interfaceScale;
   float m_interfaceStretch = 1.0f;
+  float m_widgetZoom = 1.0f;
+  Vec2F m_widgetZoomCenter;
 
   bool m_shiftHeld;
 };

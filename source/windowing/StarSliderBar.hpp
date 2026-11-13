@@ -27,6 +27,7 @@ public:
   virtual void update(float dt) override;
 
   virtual bool sendEvent(InputEvent const& event) override;
+  bool touchEnlargeable() const override { return true; }
 
 private:
   void leftCallback();

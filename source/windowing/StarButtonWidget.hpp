@@ -17,6 +17,7 @@ public:
   virtual ~ButtonWidget();
 
   virtual bool sendEvent(InputEvent const& event) override;
+  bool touchEnlargeable() const override { return true; }
   virtual void mouseOver() override;
   virtual void mouseOut() override;
   virtual void mouseReturnStillDown() override;

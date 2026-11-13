@@ -49,6 +49,7 @@ public:
 
   void setScissorRect(Maybe<RectI> const& scissorRect) override;
   void setScreenStretch(float stretch) override;
+  void setBaseTransform(Mat3F const& transformation) override;
 
   bool switchEffectConfig(String const& name) override;
 
@@ -280,6 +281,7 @@ private:
   RefPtr<GlTexture> m_whiteTexture;
 
   Maybe<RectI> m_scissorRect;
+  Mat3F m_baseTransform = Mat3F::identity();
 
   bool m_limitTextureGroupSize;
   bool m_useMultiTexturing;

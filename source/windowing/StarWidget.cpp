@@ -33,11 +33,17 @@ void Widget::render(RectI const& region) {
   if (!m_visible)
     return;
 
-  if (!setupDrawRegion(region))
-    return;
+  bool zoomed = m_touchZoom > 1.0f;
+  if (zoomed)
+    m_context->pushWidgetZoom(Vec2F(screenBoundRect().center()) * m_context->interfaceScale(), m_touchZoom);
 
-  renderImpl();
-  drawChildren();
+  if (setupDrawRegion(region)) {
+    renderImpl();
+    drawChildren();
+  }
+
+  if (zoomed)
+    m_context->popWidgetZoom();
 }
 
 void Widget::renderImpl() {}

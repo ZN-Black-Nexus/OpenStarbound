@@ -94,6 +94,11 @@ private:
   // Topmost pane under a window pixel position, honoring per-pane scale.
   PanePtr paneAtPixels(Vec2F pixelPos, bool touchLayersOnly) const;
   bool touchLayer(PaneLayer layer) const;
+  // Gives each control in the pane the largest zoom its neighbors leave room for.
+  void assignTouchZoom(PanePtr const& pane) const;
+  // The enlarged control under a window pixel position, if any.
+  WidgetPtr findZoomedWidget(Vec2F pixelPos, Vec2F& centerPixels) const;
+  Vec2F mapTouch(Vec2F pixelPos) const;
   // Interface scale this pane is drawn and hit-tested at. Panes too big to fit
   // the window at the global scale get their own smaller scale (Android only).
   float effectiveScale(PanePtr const& pane) const;
@@ -127,6 +132,10 @@ private:
   Vec2F m_touchScrollScale = Vec2F(1.0f, 1.0f);
   Vec2F m_touchScrollRemainder;
   Vec2F m_tooltipLastMousePixels;
+  // enlarged control being touched: positions map back onto its real bounds
+  Vec2F m_touchZoomCenter;
+  float m_touchZoomK = 1.0f;
+  bool m_touchZoomSlider = false;
 
   // Map of each pane layer, where the 0th pane is the topmost pane in each layer.
   Map<PaneLayer, OrderedMap<PanePtr, DismissCallback>> m_displayedPanes;

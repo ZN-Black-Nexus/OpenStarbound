@@ -30,6 +30,12 @@ public:
   Widget& operator=(Widget const&) = delete;
 
   virtual void render(RectI const& region) final;
+
+  // Touch interfaces draw controls (buttons, sliders) larger than the rest of
+  // their pane; the zoom is about the widget's center.
+  virtual bool touchEnlargeable() const { return false; }
+  float touchZoom() const { return m_touchZoom; }
+  void setTouchZoom(float zoom) { m_touchZoom = zoom; }
   virtual void update(float dt);
 
   GuiContext* context() const;
@@ -141,6 +147,7 @@ protected:
   GuiContext* m_context;
 
   bool m_visible;
+  float m_touchZoom = 1.0f;
   PolyF m_boundPoly;
 
   Vec2I m_position;

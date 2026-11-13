@@ -784,6 +784,11 @@ void OpenGlRenderer::setScissorRect(Maybe<RectI> const& scissorRect) {
   }
 }
 
+void OpenGlRenderer::setBaseTransform(Mat3F const& transformation) {
+  flushImmediatePrimitives();
+  m_baseTransform = transformation;
+}
+
 void OpenGlRenderer::setScreenStretch(float stretch) {
   flushImmediatePrimitives();
   glUniform2f(m_screenSizeUniform, m_screenSize[0] / stretch, m_screenSize[1]);
@@ -1348,7 +1353,7 @@ void OpenGlRenderer::flushImmediatePrimitives(Mat3F const& transformation) {
 
   m_immediateRenderBuffer->set(m_immediatePrimitives);
   m_immediatePrimitives.resize(0);
-  renderGlBuffer(*m_immediateRenderBuffer, transformation);
+  renderGlBuffer(*m_immediateRenderBuffer, m_baseTransform * transformation);
 }
 
 auto OpenGlRenderer::createGlTexture(TextureAddressing addressing, TextureFiltering filtering, Vec2U size)

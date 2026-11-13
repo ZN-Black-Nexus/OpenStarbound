@@ -136,7 +136,21 @@ void GuiContext::refreshKeybindings() {
 
 void GuiContext::setInterfaceScissorRect(RectI const& scissor) {
   RectF rect = RectF(scissor).scaled(interfaceScale());
-  renderer()->setScissorRect(RectI(RectF(rect.xMin() * m_interfaceStretch, rect.yMin(), rect.xMax() * m_interfaceStretch, rect.yMax())));
+  rect = RectF(rect.xMin() * m_interfaceStretch, rect.yMin(), rect.xMax() * m_interfaceStretch, rect.yMax());
+  if (m_widgetZoom != 1.0f)
+    rect = RectF(m_widgetZoomCenter + (rect.min() - m_widgetZoomCenter) * m_widgetZoom, m_widgetZoomCenter + (rect.max() - m_widgetZoomCenter) * m_widgetZoom);
+  renderer()->setScissorRect(RectI(rect));
+}
+
+void GuiContext::pushWidgetZoom(Vec2F centerPixels, float zoom) {
+  m_widgetZoom = zoom;
+  m_widgetZoomCenter = centerPixels;
+  renderer()->setBaseTransform(Mat3F::scaling(zoom, centerPixels));
+}
+
+void GuiContext::popWidgetZoom() {
+  m_widgetZoom = 1.0f;
+  renderer()->setBaseTransform(Mat3F::identity());
 }
 
 void GuiContext::resetInterfaceScissorRect() {
