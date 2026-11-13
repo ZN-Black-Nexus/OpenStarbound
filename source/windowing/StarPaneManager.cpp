@@ -267,7 +267,10 @@ float PaneManager::effectiveScale(PanePtr const& pane) const {
     if (fit >= global * 0.98f) {
       // Room to spare: enlarge menus and windows past the chosen scale so
       // their buttons are finger sized, without zooming the HUD or the world.
-      float enlarged = std::floor(std::min(global * 1.75f, fit * 0.96f) * 2.0f) / 2.0f;
+      // In-game windows keep to half the width so two fit side by side.
+      if (layerPair.first == PaneLayer::Window)
+        fit = std::min(fit, 0.5f * window[0] / size[0]);
+      float enlarged = std::floor(std::min(global * 3.0f, fit * 0.99f) * 8.0f) / 8.0f;
       return std::max(global, enlarged);
     }
     return std::max(1.0f, std::floor(fit * 8.0f) / 8.0f);
@@ -281,21 +284,6 @@ float PaneManager::effectiveScale(PanePtr const& pane) const {
 pair<float, float> PaneManager::paneTransform(PanePtr const& pane) const {
   float scale = effectiveScale(pane);
   float stretch = 1.0f;
-#ifdef STAR_SYSTEM_ANDROID
-  // Phone screens are much wider than the 4:3-ish windows, so widen menus and
-  // windows into the spare width; in-game windows keep to half the screen so
-  // two still fit side by side.
-  for (auto const& layerPair : m_displayedPanes) {
-    if (!layerPair.second.contains(pane))
-      continue;
-    float width = pane->size()[0] * scale;
-    if (touchLayer(layerPair.first) && width > 0) {
-      float available = m_context->renderer()->screenSize()[0] * (layerPair.first == PaneLayer::Window ? 0.5f : 0.98f);
-      stretch = clamp(available / width, 1.0f, 1.5f);
-    }
-    break;
-  }
-#endif
   return {scale, stretch};
 }
 
