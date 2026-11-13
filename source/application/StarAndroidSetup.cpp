@@ -98,6 +98,17 @@ String prepareAndroidDataDirectory() {
   for (auto sub : {"assets", "mods", "storage", "logs", "tmp"})
     File::makeDirectoryRecursive(File::relativeTo(dataDir, sub));
 
+  // Temp files are not unlinked while open on Android, so clear out the last run's.
+  String tmpDir = File::relativeTo(dataDir, "tmp");
+  try {
+    for (auto const& entry : File::dirList(tmpDir)) {
+      if (!entry.second)
+        File::remove(File::relativeTo(tmpDir, entry.first));
+    }
+  } catch (StarException const& e) {
+    Logger::warn("Android: could not clean temp directory: {}", e.what());
+  }
+
   // bionic has no writable /tmp; File temp helpers read TMPDIR on Android.
   setenv("TMPDIR", File::relativeTo(dataDir, "tmp").utf8Ptr(), 1);
 

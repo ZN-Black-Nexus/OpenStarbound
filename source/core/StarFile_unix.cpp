@@ -146,8 +146,13 @@ FilePtr File::ephemeralFile() {
   auto res = mkstemp(path.ptr());
   if (res < 0)
     throw IOException::format("tmpfile error: {}", strerror(errno));
+#ifndef STAR_SYSTEM_ANDROID
   if (::unlink(path.ptr()) < 0)
     throw IOException::format("Could not remove mkstemp file when creating ephemeralFile: {}", strerror(errno));
+#endif
+  // On Android the file stays linked: SD card (FUSE) storage fails every
+  // later operation on an unlinked open file with EIO. The temp directory is
+  // emptied at startup instead.
   file->m_file = handleFromFd(res);
   file->setMode(IOMode::ReadWrite);
   return file;
