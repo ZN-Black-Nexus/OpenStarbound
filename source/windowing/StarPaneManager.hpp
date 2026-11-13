@@ -97,6 +97,16 @@ private:
   // Interface scale this pane is drawn and hit-tested at. Panes too big to fit
   // the window at the global scale get their own smaller scale (Android only).
   float effectiveScale(PanePtr const& pane) const;
+  // How a pane is fitted to the screen. A tall pane that cannot fit at a
+  // comfortable scale is folded: its top half is drawn in a left column and
+  // its bottom half in a right column.
+  struct PaneFit { float scale; bool folded; int foldY; };
+  struct FoldGeom { RectI regionL; RectI regionR; Vec2I originL; Vec2I originR; };
+  PaneFit paneFit(PanePtr const& pane) const;
+  FoldGeom foldGeom(PanePtr const& pane, int foldY) const;
+  int foldLine(PanePtr const& pane) const;
+  // Points the pane at whichever column the pixel position is in.
+  void applyFoldOffset(PanePtr const& pane, PaneFit const& fit, Vec2F pixelPos) const;
   // The part of a pane that is actually drawn: its background art without
   // transparent padding. Pane sizes include that padding.
   RectI visibleRect(PanePtr const& pane) const;
@@ -113,6 +123,8 @@ private:
 
   HashMap<Pane const*, pair<float, float>> m_paneScales;
   mutable HashMap<Pane const*, pair<Vec2I, RectI>> m_visibleRects;
+  mutable HashMap<Pane const*, pair<Vec2I, int>> m_foldLines;
+  float m_globalScale = 1.0f;
 
   // Touch gestures over panes: a press is held back until it resolves into a
   // tap (snapped to the nearest button), a drag, a scroll of the scroll area

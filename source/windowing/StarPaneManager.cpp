@@ -241,6 +241,18 @@ namespace {
     return {};
   }
 
+  Maybe<Vec2F> eventPixels(InputEvent const& event) {
+    if (auto e = event.ptr<MouseMoveEvent>())
+      return e->mousePosition;
+    if (auto e = event.ptr<MouseButtonDownEvent>())
+      return e->mousePosition;
+    if (auto e = event.ptr<MouseButtonUpEvent>())
+      return e->mousePosition;
+    if (auto e = event.ptr<MouseWheelEvent>())
+      return e->mousePosition;
+    return {};
+  }
+
   float distanceToRect(RectI const& rect, Vec2F const& p) {
     float dx = std::max({(float)rect.xMin() - p[0], 0.0f, p[0] - (float)rect.xMax()});
     float dy = std::max({(float)rect.yMin() - p[1], 0.0f, p[1] - (float)rect.yMax()});
@@ -287,23 +299,78 @@ RectI PaneManager::visibleRect(PanePtr const& pane) const {
 }
 
 float PaneManager::effectiveScale(PanePtr const& pane) const {
-  float global = m_context->interfaceScale();
+  return paneFit(pane).scale;
+}
+
+int PaneManager::foldLine(PanePtr const& pane) const {
+  auto cached = m_foldLines.ptr(pane.get());
+  if (cached && cached->first == pane->size())
+    return cached->second;
+
+  RectI visible = visibleRect(pane);
+  List<Vec2I> spans; // vertical extent of each leaf widget, relative to the pane
+  int base = pane->screenPosition()[1];
+  function<void(WidgetPtr const&)> collect = [&](WidgetPtr const& widget) {
+    if (!widget || !widget->visibility())
+      return;
+    if (widget->numChildren() == 0) {
+      RectI rect = widget->screenBoundRect();
+      spans.append(Vec2I(rect.yMin() - base, rect.yMax() - base));
+    }
+    for (size_t i = 0; i < widget->numChildren(); ++i)
+      collect(widget->getChildNum(i));
+  };
+  for (size_t i = 0; i < pane->numChildren(); ++i)
+    collect(pane->getChildNum(i));
+
+  // split near the middle, on the row that cuts through the fewest widgets
+  int mid = visible.yMin() + visible.height() / 2;
+  int best = mid;
+  int bestScore = std::numeric_limits<int>::max();
+  for (int y = visible.yMin() + visible.height() * 35 / 100; y <= visible.yMin() + visible.height() * 65 / 100; ++y) {
+    int score = std::abs(y - mid);
+    for (auto const& span : spans) {
+      if (span[0] < y && y < span[1])
+        score += 1000;
+    }
+    if (score < bestScore) {
+      bestScore = score;
+      best = y;
+    }
+  }
+  m_foldLines[pane.get()] = {pane->size(), best};
+  return best;
+}
+
+PaneManager::PaneFit PaneManager::paneFit(PanePtr const& pane) const {
+  float global = m_globalScale;
+  PaneFit result{global, false, 0};
 #ifdef STAR_SYSTEM_ANDROID
   for (auto const& layerPair : m_displayedPanes) {
     if (!layerPair.second.contains(pane))
       continue;
-    if (layerPair.first == PaneLayer::World || layerPair.first == PaneLayer::Tooltip)
-      return global;
-    if (layerPair.first == PaneLayer::Hud && !m_touchAssistHud)
-      return global;
-    Vec2F size = Vec2F(visibleRect(pane).size());
+    if (!touchLayer(layerPair.first))
+      return result;
+    RectI visible = visibleRect(pane);
+    Vec2F size = Vec2F(visible.size());
     if (size[0] <= 0 || size[1] <= 0)
-      return global;
+      return result;
     Vec2F window = Vec2F(m_context->renderer()->screenSize());
-    // Fractional so an oversized pane fills the screen instead of dropping a
-    // whole step. The tolerance keeps window-sized panes (sized from the
-    // current scale, rounded up) from shrinking themselves.
     float fit = std::min(window[0] / size[0], window[1] / size[1]);
+
+    if (fit < global * 0.98f && size[1] > size[0] && layerPair.first != PaneLayer::Window) {
+      int fold = foldLine(pane);
+      float columnHeight = std::max(visible.yMax() - fold, fold - visible.yMin());
+      float foldedFit = std::min(window[0] / (size[0] * 2 + 4), window[1] / columnHeight);
+      if (foldedFit > fit * 1.25f) {
+        result.folded = true;
+        result.foldY = fold;
+        fit = foldedFit;
+      }
+    }
+
+    // The tolerance keeps window-sized panes (sized from the current scale,
+    // rounded up) from shrinking themselves.
     if (fit >= global * 0.98f) {
       // Room to spare: enlarge menus and windows past the chosen scale so
       // their buttons are finger sized, without zooming the HUD or the world.
@@ -311,18 +378,52 @@ float PaneManager::effectiveScale(PanePtr const& pane) const {
       if (layerPair.first == PaneLayer::Window)
         fit = std::min(fit, 0.5f * window[0] / size[0]);
       float enlarged = std::floor(std::min(global * 2.0f, fit * 0.99f) * 8.0f) / 8.0f;
-      return std::max(global, enlarged);
+      result.scale = std::max(global, enlarged);
+    } else {
+      result.scale = std::max(1.0f, std::floor(fit * 8.0f) / 8.0f);
     }
-    return std::max(1.0f, std::floor(fit * 8.0f) / 8.0f);
+    return result;
   }
 #else
   (void)pane;
 #endif
-  return global;
+  return result;
+}
+
+PaneManager::FoldGeom PaneManager::foldGeom(PanePtr const& pane, int foldY) const {
+  RectI visible = visibleRect(pane);
+  Vec2I window = windowSize();
+  int width = visible.width();
+  int gap = 4;
+  int topHeight = visible.yMax() - foldY;
+  int bottomHeight = foldY - visible.yMin();
+  int x0 = (window[0] - (width * 2 + gap)) / 2;
+  int x1 = x0 + width + gap;
+  int top = (window[1] + std::max(topHeight, bottomHeight)) / 2;
+  FoldGeom geom;
+  geom.originL = Vec2I(x0 - visible.xMin(), top - visible.yMax());
+  geom.regionL = RectI(x0, top - topHeight, x0 + width, top);
+  geom.originR = Vec2I(x1 - visible.xMin(), top - foldY);
+  geom.regionR = RectI(x1, top - bottomHeight, x1 + width, top);
+  return geom;
+}
+
+void PaneManager::applyFoldOffset(PanePtr const& pane, PaneFit const& fit, Vec2F pixelPos) const {
+  if (!fit.folded)
+    return;
+  auto geom = foldGeom(pane, fit.foldY);
+  Vec2I pos = Vec2I::floor(pixelPos / fit.scale);
+  // off both columns: park the pane where nothing can be hit
+  Vec2I origin = Vec2I(-100000, -100000);
+  if (geom.regionL.contains(pos))
+    origin = geom.originL;
+  else if (geom.regionR.contains(pos))
+    origin = geom.originR;
+  pane->setDrawingOffset(origin - pane->relativePosition());
 }
 
 pair<float, float> PaneManager::paneTransform(PanePtr const& pane) const {
-  float scale = effectiveScale(pane);
+  float scale = paneFit(pane).scale;
   float stretch = 1.0f;
   return {scale, stretch};
 }
@@ -339,10 +440,16 @@ PanePtr PaneManager::paneAtPixels(Vec2F pixelPos, bool touchLayersOnly) const {
       auto const& pane = panePair.first;
       if (pane == m_activeTooltip || !pane->active())
         continue;
-      auto t = paneTransform(pane);
-      ScaleScope scope(m_context, t);
-      if (pane->inWindow(Vec2I::floor(Vec2F(pixelPos[0] / (t.first * t.second), pixelPos[1] / t.first))))
+      auto fit = paneFit(pane);
+      ScaleScope scope(m_context, {fit.scale, 1.0f});
+      Vec2I ipos = Vec2I::floor(pixelPos / fit.scale);
+      if (fit.folded) {
+        auto geom = foldGeom(pane, fit.foldY);
+        if (geom.regionL.contains(ipos) || geom.regionR.contains(ipos))
+          return pane;
+      } else if (pane->inWindow(ipos)) {
         return pane;
+      }
       // a modal window blocks everything beneath it
       if (touchLayersOnly && layerPair.first == PaneLayer::ModalWindow)
         return {};
@@ -373,8 +480,17 @@ Maybe<Vec2F> PaneManager::findSnapTarget(Vec2F pixelPos, float maxPixelDistance,
       Vec2I ipos = Vec2I::floor(interfacePos);
       List<shared_ptr<ButtonWidget>> buttons;
       collectButtons(pane, buttons);
+      auto fit = paneFit(pane);
+      FoldGeom geom;
+      if (fit.folded)
+        geom = foldGeom(pane, fit.foldY);
+      for (int column = 0; column < (fit.folded ? 2 : 1); ++column)
       for (auto const& button : buttons) {
+        if (fit.folded)
+          pane->setDrawingOffset((column == 0 ? geom.originL : geom.originR) - pane->relativePosition());
         RectI rect = button->screenBoundRect();
+        if (fit.folded && !(column == 0 ? geom.regionL : geom.regionR).contains(rect.center()))
+          continue;
         if (rect.contains(ipos)) {
           if (onButton)
             *onButton = true;
@@ -390,7 +506,7 @@ Maybe<Vec2F> PaneManager::findSnapTarget(Vec2F pixelPos, float maxPixelDistance,
         foundModal = true;
         break;
       }
-      if (pane->inWindow(ipos))
+      if (fit.folded ? (geom.regionL.contains(ipos) || geom.regionR.contains(ipos)) : pane->inWindow(ipos))
         break;
     }
     if (foundModal)
@@ -430,6 +546,7 @@ bool PaneManager::handleTouchEvent(InputEvent const& event) {
         auto t = paneTransform(pane);
         ScaleScope scope(m_context, t);
         Vec2F ppu = Vec2F(t.first * t.second, t.first);
+        applyFoldOffset(pane, paneFit(pane), m_touchStart);
         if (auto area = findScrollArea(pane, Vec2I::floor(Vec2F(m_touchStart[0] / ppu[0], m_touchStart[1] / ppu[1])))) {
           m_touchScrollArea = area;
           m_touchScrollScale = ppu;
@@ -502,6 +619,7 @@ void PaneManager::updateTouch() {
 }
 
 bool PaneManager::sendInputEvent(InputEvent const& event) {
+  m_globalScale = m_context->interfaceScale();
 #ifdef STAR_SYSTEM_ANDROID
   return handleTouchEvent(event);
 #else
@@ -568,7 +686,10 @@ bool PaneManager::handleInputEvent(InputEvent const& event) {
     for (auto const& panePair : copy(layerPair.second)) {
       bool consumed;
       {
-        ScaleScope scope(m_context, paneTransform(panePair.first));
+        auto fit = paneFit(panePair.first);
+        ScaleScope scope(m_context, {fit.scale, 1.0f});
+        if (auto pixels = eventPixels(event))
+          applyFoldOffset(panePair.first, fit, *pixels);
         consumed = panePair.first->sendEvent(event);
       }
       if (consumed) {
@@ -599,6 +720,7 @@ void PaneManager::render() {
   }
 
   float globalScale = m_context->interfaceScale();
+  m_globalScale = globalScale;
   auto renderer = m_context->renderer();
   HashMap<Pane const*, pair<float, float>> newScales;
   for (auto const& layerPair : reverseIterate(m_displayedPanes)) {
@@ -608,6 +730,20 @@ void PaneManager::render() {
         auto t = paneTransform(pane);
         float scale = t.first, stretch = t.second;
         auto last = m_paneScales.value(pane.get(), {m_prevInterfaceScale, 1.0f});
+        auto fit = paneFit(pane);
+        if (fit.folded) {
+          ScaleScope scope(m_context, t);
+          auto geom = foldGeom(pane, fit.foldY);
+          if (t != last)
+            Logger::info("PaneManager: pane {}x{} folded at row {} and drawn at scale {} (ui scale {})",
+                pane->size()[0], pane->size()[1], fit.foldY, scale, globalScale);
+          newScales[pane.get()] = t;
+          pane->setDrawingOffset(geom.originL - pane->relativePosition());
+          pane->render(geom.regionL);
+          pane->setDrawingOffset(geom.originR - pane->relativePosition());
+          pane->render(geom.regionR);
+          continue;
+        }
         bool adapted = scale != globalScale || stretch != 1.0f;
         // where the pane's center was on screen, in pixels, before any change
         Vec2F center = Vec2F(pane->position()) + Vec2F(pane->size()) / 2;
@@ -651,6 +787,7 @@ void PaneManager::render() {
 }
 
 void PaneManager::update(float dt) {
+  m_globalScale = m_context->interfaceScale();
 #ifdef STAR_SYSTEM_ANDROID
   updateTouch();
 #endif
@@ -675,6 +812,7 @@ void PaneManager::update(float dt) {
       PanePtr tooltip;
       {
         ScaleScope scope(m_context, parentT);
+        applyFoldOffset(newTooltipParentPane, paneFit(newTooltipParentPane), m_tooltipLastMousePixels);
         tooltip = newTooltipParentPane->createTooltip(Vec2I::floor(Vec2F(m_tooltipLastMousePixels[0] / (parentT.first * parentT.second), m_tooltipLastMousePixels[1] / parentT.first)));
       }
       if (tooltip) {
