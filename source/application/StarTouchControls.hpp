@@ -43,11 +43,11 @@ public:
       {"USE", {4.2f, 1.2f}, true, true,   0.70f, Key::E, false},
       {"TECH", {3.9f, 3.0f}, true, true,  0.65f, Key::F, false},
       {"INV", {1.0f, 4.1f}, true, true,   0.60f, Key::I, false},
-      {"MENU", {0.8f, 0.8f}, true, false, 0.55f, Key::Escape, false},
+      {"MENU", {0.6f, 0.6f}, true, false, 0.45f, Key::Escape, false},
       {"CRAFT", {2.1f, 0.8f}, true, false, 0.55f, Key::C, false},
-      {"ALT", {3.4f, 0.8f}, true, false,  0.55f, {}, true},
-      {"SHIFT", {4.7f, 0.8f}, true, false, 0.55f, Key::LShift, true},
-      {"CTRL", {6.0f, 0.8f}, true, false, 0.55f, {}, false},
+      {"ALT", {1.6f, 0.6f}, true, false,  0.45f, {}, true},
+      {"SHIFT", {2.6f, 0.6f}, true, false, 0.45f, Key::LShift, true},
+      {"CTRL", {3.6f, 0.6f}, true, false, 0.45f, {}, false},
     };
     m_buttonDown.resize(m_buttons.size(), false);
     m_toggled.resize(m_buttons.size(), false);
@@ -179,7 +179,7 @@ public:
     }
 
     for (size_t i = 0; i < m_buttons.size(); ++i) {
-      if (m_joystick && i <= 3)
+      if (hidden(i))
         continue;
       auto const& b = m_buttons[i];
       Vec2F c = center(i);
@@ -248,6 +248,10 @@ private:
     float y = b.bottom ? m_size[1] - anchor[1] * u : anchor[1] * u;
     return Vec2F(x, y);
   }
+
+  // The d-pad gives way to the joystick; inventory and crafting are left to
+  // the game's own side bar so the overlay does not sit on top of the HUD.
+  bool hidden(size_t index) const { return (m_joystick && index <= 3) || index == 7 || index == 9; }
 
   float joyRadius() const { return 1.15f * unit(); }
   float aimRadius() const { return 1.35f * unit(); }
@@ -362,7 +366,7 @@ private:
     int best = -1;
     float bestDist = 0.0f;
     for (size_t i = 0; i < m_buttons.size(); ++i) {
-      if (m_joystick && i <= 3)
+      if (hidden(i))
         continue;
       auto const& b = m_buttons[i];
       Vec2F c = center(i);
