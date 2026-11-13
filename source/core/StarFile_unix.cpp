@@ -1,4 +1,5 @@
 #include "StarFile.hpp"
+#include "StarLogging.hpp"
 #include "StarFormat.hpp"
 #include "StarRandom.hpp"
 #include "StarEncode.hpp"
@@ -281,8 +282,16 @@ void File::fsync(void* file) {
 }
 
 void File::fclose(void* file) {
-  if (::close(fdFromHandle(file)) < 0)
+  if (::close(fdFromHandle(file)) < 0) {
+#ifdef STAR_SYSTEM_ANDROID
+    // SD card and other FUSE-backed storage report EIO when closing a file
+    // that was unlinked while open (temp files). The descriptor is released
+    // either way, and throwing here would terminate from a destructor.
+    Logger::warn("File: close error ignored: {}", strerror(errno));
+#else
     throw IOException::format("Close error: {}", strerror(errno));
+#endif
+  }
 }
 
 StreamOffset File::fsize(void* file) {
